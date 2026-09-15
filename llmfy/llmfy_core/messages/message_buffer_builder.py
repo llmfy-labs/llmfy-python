@@ -9,8 +9,8 @@ from llmfy.llmfy_core.messages.tool_call import ToolCall
 from llmfy.llmfy_core.model_backend import ModelBackend
 
 
-class MessageTemp:
-    """MessageTemp class. History only per request, not saved to memory."""
+class MessageBufferBuilder:
+    """MessageBufferBuilder class. History only per request, not saved to memory."""
 
     # Populated lazily by `_get_formatter` on first use, not at import time:
     # eagerly importing the provider formatters here would pull in each
@@ -115,8 +115,11 @@ class MessageTemp:
         cache = self._formatted_cache.setdefault(backend, {})
 
         # Drop entries for messages no longer in history (e.g. after `clear()`
-        # dropped everything but the system message) so the cache can't grow
-        # unbounded across many invoke()/chat() calls on the same instance.
+        # dropped everything but the system message) so the cache can't hold
+        # stale entries. `LLMfy` itself never calls `clear()` anymore — each
+        # `invoke`/`chat` call builds its own fresh `MessageBufferBuilder`
+        # instead of reusing and clearing a shared one (see `llmfy.py`) — but
+        # `clear()` stays a public method any other caller may still use.
         current_ids = {msg.id for msg in self.messages}
         for stale_id in cache.keys() - current_ids:
             del cache[stale_id]

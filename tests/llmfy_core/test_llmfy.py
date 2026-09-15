@@ -391,6 +391,26 @@ class TestInvokeStream:
         results = list(llm.invoke_stream("hi"))
         assert results[0].result.content == ""
 
+    def test_tool_call_completed_mid_stream_survives_trailing_chunk(self):
+        """Regression: a tool call that finishes parsing on one chunk must
+        not be lost by a later chunk that carries no tool_calls of its own
+        (e.g. a trailing finish-reason/usage-only chunk with empty content).
+        The per-chunk `tool_calls` local is intentionally reset to `[]`
+        every iteration (so each yielded chunk only reports its own delta),
+        but that same variable used to be reused, unaccumulated, for the
+        final assistant message built after the loop — so any chunk after
+        the one that completed the tool call silently erased it."""
+        tool_call = ToolCall(
+            tool_call_id="c1", request_call_id="r1", name="get_weather", arguments={}
+        )
+        chunks = [AIResponse(tool_calls=[tool_call]), AIResponse(content="")]
+        model = FakeAIModel(stream_chunks=chunks)
+        llm = LLMfy(model)
+
+        results = list(llm.invoke_stream("hi"))
+        assistant_message = results[-1].messages[-1]
+        assert assistant_message.tool_calls == [tool_call]
+
 
 class TestChatStream:
     def test_yields_content_then_terminal_sentinel_with_history(self):
@@ -403,15 +423,64 @@ class TestChatStream:
         assert results[-1].result.content is None
         assert len(results[-1].messages) == 2
 
-
-class TestClearMessagesTemp:
-    def test_clears_history(self):
-        model = FakeAIModel(responses=[AIResponse(content="ok")])
+    def test_tool_call_completed_mid_stream_survives_trailing_chunk(self):
+        """Same regression as
+        TestInvokeStream.test_tool_call_completed_mid_stream_survives_trailing_chunk,
+        for `chat_stream`. This is what silently broke the FlowEngine
+        streaming agent example (flowengine_agent_stream_example.py):
+        `main`'s node consumes `achat_stream` (which wraps this method), and
+        `should_continue` routes on `last_message.tool_calls` — if a
+        completed tool call is dropped by a trailing chunk, `tool_calls`
+        reads as falsy and the graph routes straight to END with an empty
+        reply instead of looping into the `tools` node."""
+        tool_call = ToolCall(
+            tool_call_id="c1", request_call_id="r1", name="get_weather", arguments={}
+        )
+        chunks = [AIResponse(tool_calls=[tool_call]), AIResponse(content="")]
+        model = FakeAIModel(stream_chunks=chunks)
         llm = LLMfy(model)
-        llm.invoke("hi")
-        assert len(llm.messages_temp.messages) > 0
-        llm.clear_messages_temp()
-        assert llm.messages_temp.messages == []
+
+        results = list(llm.chat_stream([Message(role=Role.USER, content="hi")]))
+        assistant_message = results[-1].messages[-1]
+        assert assistant_message.tool_calls == [tool_call]
+
+
+class TestNoHistoryLeakageBetweenCalls:
+    """`LLMfy` no longer exposes `messages_temp`/`clear_messages_temp()`:
+    each call builds its own local message history instead of a shared
+    instance attribute (see `llmfy.py`'s "Async wrappers" comment for why —
+    two concurrent calls on the same instance used to race on it). These
+    tests exercise that guarantee through the public API instead: reusing
+    one `LLMfy` instance for a second, unrelated call must not see the
+    first call's history."""
+
+    def test_invoke_does_not_leak_into_next_invoke(self):
+        model = FakeAIModel(
+            responses=[AIResponse(content="first"), AIResponse(content="second")]
+        )
+        llm = LLMfy(model)
+
+        first = llm.invoke("hi")
+        assert len(first.messages) == 2  # user + assistant
+
+        second = llm.invoke("hi again")
+        assert len(second.messages) == 2  # fresh history, not 4
+
+    def test_chat_does_not_leak_into_next_chat(self):
+        model = FakeAIModel(
+            responses=[AIResponse(content="first"), AIResponse(content="second")]
+        )
+        llm = LLMfy(model)
+
+        llm.chat([Message(role=Role.USER, content="hi")])
+        second = llm.chat([Message(role=Role.USER, content="hi again")])
+
+        assert len(second.messages) == 2  # only this call's user + assistant
+
+    def test_messages_temp_is_not_a_public_attribute(self):
+        llm = LLMfy(FakeAIModel())
+        assert not hasattr(llm, "messages_temp")
+        assert not hasattr(llm, "clear_messages_temp")
 
 
 # ---------------------------------------------------------------------------
@@ -463,7 +532,7 @@ class TestAsyncMethods:
         assert result.result.content == "async chat reply"
 
     @pytest.mark.asyncio
-    async def test_ainvoke_stream_wraps_sync_stream(self):
+    async def test_ainvoke_stream_yields_chunks(self):
         chunks = [AIResponse(content="a"), AIResponse(content="b")]
         model = FakeAIModel(stream_chunks=chunks)
         llm = LLMfy(model)
@@ -472,7 +541,27 @@ class TestAsyncMethods:
         assert [r.result.content for r in results[:2]] == ["a", "b"]
 
     @pytest.mark.asyncio
-    async def test_achat_stream_wraps_sync_stream(self):
+    async def test_ainvoke_stream_uses_native_async_generate_stream(self):
+        """Regression: `ainvoke_stream` used to thread-offload the whole
+        sync `invoke_stream` method (`sync_gen_to_async`), which drove
+        `model.generate_stream` — never the model's own native async
+        `agenerate_stream`, even though every backend implements it (see
+        `BaseAIModel.agenerate_stream`). Asserting `generate_stream` is
+        never touched catches a regression back to that thread-offloaded
+        wrapper."""
+
+        class AsyncOnlyModel(FakeAIModel):
+            def generate_stream(self, messages, tools=None, **kwargs):
+                raise AssertionError("sync generate_stream should not be called")
+
+        model = AsyncOnlyModel(stream_chunks=[AIResponse(content="a")])
+        llm = LLMfy(model)
+
+        results = [chunk async for chunk in llm.ainvoke_stream("hi")]
+        assert results[0].result.content == "a"
+
+    @pytest.mark.asyncio
+    async def test_achat_stream_yields_chunks(self):
         chunks = [AIResponse(content="x")]
         model = FakeAIModel(stream_chunks=chunks)
         llm = LLMfy(model)
@@ -482,6 +571,67 @@ class TestAsyncMethods:
             async for chunk in llm.achat_stream([Message(role=Role.USER, content="hi")])
         ]
         assert results[0].result.content == "x"
+
+    @pytest.mark.asyncio
+    async def test_achat_stream_uses_native_async_generate_stream(self):
+        """Same regression as
+        TestAsyncMethods.test_ainvoke_stream_uses_native_async_generate_stream,
+        for `achat_stream`."""
+
+        class AsyncOnlyModel(FakeAIModel):
+            def generate_stream(self, messages, tools=None, **kwargs):
+                raise AssertionError("sync generate_stream should not be called")
+
+        model = AsyncOnlyModel(stream_chunks=[AIResponse(content="x")])
+        llm = LLMfy(model)
+
+        results = [
+            chunk
+            async for chunk in llm.achat_stream([Message(role=Role.USER, content="hi")])
+        ]
+        assert results[0].result.content == "x"
+
+    @pytest.mark.asyncio
+    async def test_ainvoke_stream_tool_call_completed_mid_stream_survives_trailing_chunk(
+        self,
+    ):
+        """Async counterpart of
+        TestInvokeStream.test_tool_call_completed_mid_stream_survives_trailing_chunk
+        — `ainvoke_stream` has its own accumulation loop (an `async for`
+        over `agenerate_stream`, not a wrapped sync `invoke_stream`), so the
+        same trailing-chunk tool_calls bug could resurface here
+        independently."""
+        tool_call = ToolCall(
+            tool_call_id="c1", request_call_id="r1", name="get_weather", arguments={}
+        )
+        chunks = [AIResponse(tool_calls=[tool_call]), AIResponse(content="")]
+        model = FakeAIModel(stream_chunks=chunks)
+        llm = LLMfy(model)
+
+        results = [chunk async for chunk in llm.ainvoke_stream("hi")]
+        assistant_message = results[-1].messages[-1]
+        assert assistant_message.tool_calls == [tool_call]
+
+    @pytest.mark.asyncio
+    async def test_achat_stream_tool_call_completed_mid_stream_survives_trailing_chunk(
+        self,
+    ):
+        """Async counterpart of
+        TestChatStream.test_tool_call_completed_mid_stream_survives_trailing_chunk
+        for `achat_stream`."""
+        tool_call = ToolCall(
+            tool_call_id="c1", request_call_id="r1", name="get_weather", arguments={}
+        )
+        chunks = [AIResponse(tool_calls=[tool_call]), AIResponse(content="")]
+        model = FakeAIModel(stream_chunks=chunks)
+        llm = LLMfy(model)
+
+        results = [
+            chunk
+            async for chunk in llm.achat_stream([Message(role=Role.USER, content="hi")])
+        ]
+        assistant_message = results[-1].messages[-1]
+        assert assistant_message.tool_calls == [tool_call]
 
     @pytest.mark.asyncio
     async def test_async_generic_exception_wrapped(self):
