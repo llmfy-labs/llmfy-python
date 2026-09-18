@@ -4,7 +4,7 @@
 
 <a href="https://img.shields.io/github/actions/workflow/status/irufano/llmfy/release.yml">![llmfy](https://img.shields.io/github/actions/workflow/status/irufano/llmfy/release.yml?style=for-the-badge&logo=pypi&logoColor=blue&label=publish
 )</a>
-<a href="https://pypi.org/project/llmfy/0.10.1">![llmfy](https://img.shields.io/badge/llmfy-v0.10.1-31CA9C.svg?style=for-the-badge&logo=pypi&logoColor=yellow)</a>
+<a href="https://pypi.org/project/llmfy/0.11.0">![llmfy](https://img.shields.io/badge/llmfy-v0.11.0-31CA9C.svg?style=for-the-badge&logo=pypi&logoColor=yellow)</a>
 <a href="https://pypi.org/project/llmfy/">![llmfy](https://img.shields.io/pypi/v/llmfy?style=for-the-badge&label=latest&labelColor=691DC6&color=B77309)</a>
 <a href="">![python](https://img.shields.io/badge/python->=3.11-4392FF.svg?style=for-the-badge&logo=python&logoColor=4392FF)</a>
 
