@@ -47,12 +47,19 @@ jobs:
           #   0=none 1=patch(fix) 2=minor(feat) 3=major(breaking)
           # Breaking marker is either the repo's "[breaking-changes]" subject
           # prefix, or the standard Conventional Commits "type!:" suffix
-          # (e.g. "feat!:", "fix!:") -- both force MAJOR regardless of type.
+          # (e.g. "feat!:", "fix!:").
+          #
+          # TEMPORARY (pre-1.0): a breaking marker is capped at rank 2 (MINOR)
+          # instead of 3 (MAJOR) -- the package is still churning through
+          # frequent breaking changes pre-1.0 and a MAJOR bump per breaking
+          # commit isn't wanted yet. Once the API stabilizes, change `r=2`
+          # back to `r=3` below (and undo the matching note in
+          # CONTRIBUTING.md's version-bump table) to restore real MAJOR bumps.
           RANK=0
           while IFS= read -r subject; do
             [ -z "$subject" ] && continue
             if [[ "$subject" == \[breaking-changes\]* ]] || [[ "$subject" =~ ^[a-zA-Z]+(\(.+\))?!: ]]; then
-              r=3
+              r=2  # TODO: restore to 3 (MAJOR) once out of the pre-1.0 churn period
             elif [[ "$subject" =~ ^feat(\(.+\))?: ]]; then
               r=2
             elif [[ "$subject" =~ ^fix(\(.+\))?: ]]; then

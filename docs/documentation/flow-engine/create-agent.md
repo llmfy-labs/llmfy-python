@@ -13,7 +13,7 @@ The most common FlowEngine pattern is an **agent loop**: the LLM runs, optionall
 from llmfy import (
     LLMfy, BedrockConverseModel, BedrockConverseConfig,
     Message, Tool, ToolRegistry, tools_node,
-    FlowEngine, START, END,
+    FlowEngine, InMemoryCheckpointer, START, END,
 )
 from typing import List, Annotated
 from typing_extensions import TypedDict
@@ -81,14 +81,14 @@ def should_continue(state: AppState) -> str:
     return END
 
 # 4. Build flow
-flow = FlowEngine(state_schema=AppState)
+flow = FlowEngine(state_schema=AppState, checkpointer=InMemoryCheckpointer())
 
 flow.add_node("main", main_orchestrator)
 flow.add_node("tools", tools_executor)
 
 flow.add_edge(START, "main")
 flow.add_edge("tools", "main")
-flow.add_conditional_edge("main", ["tools", END], should_continue)
+flow.add_conditional_edges("main", should_continue, ["tools", END])
 
 agent = flow.build()
 

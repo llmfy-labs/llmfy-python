@@ -1,175 +1,117 @@
 """
-Examples demonstrating FlowEngine with normal node (non-streaming node) and run with invoke.
+Tool-calling LLM agent built on FlowEngine, driven with `invoke()`
+(non-streaming). A conditional edge loops back to "tools" whenever the
+model's last message requests a tool call, and to END otherwise.
+
+Requires a Google AI API key (`GOOGLE_API_KEY` in the environment / a
+`.env` file) — see flowengine_agent_stream_example.py for the streaming
+equivalent.
 """
 
 import asyncio
-import os
 from typing import Annotated, TypedDict, cast
 
 from dotenv import load_dotenv
-from sqlalchemy.engine import URL
 
 from llmfy import (
-    BedrockConverseConfig,
-    BedrockConverseModel,
+    END,
+    START,
+    FlowEngine,
+    # GoogleAIGenerateConfig,
+    # GoogleAIGenerateModel,
+    InMemoryCheckpointer,
     LLMfy,
     Message,
+    OpenAIChatConfig,
+    OpenAIChatModel,
+    Role,
     Tool,
     ToolRegistry,
     tools_node,
 )
-from llmfy.flow_engine.checkpointer.redis_checkpointer import RedisCheckpointer
-from llmfy.flow_engine.checkpointer.sql_checkpointer import SQLCheckpointer
-from llmfy.flow_engine.flow_engine import FlowEngine
-from llmfy.flow_engine.node.node import END, START
-from llmfy.llmfy_core.messages.role import Role
 
 load_dotenv()
 
 
-db_url = URL.create(
-    drivername="mysql+pymysql",
-    username=os.getenv("MYSQL_USER", "root"),
-    password=os.getenv("MYSQL_PASSWORD", ""),
-    host=os.getenv("MYSQL_HOST", "localhost"),
-    port=int(os.getenv("MYSQL_PORT", 3306)),
-    database=os.getenv("MYSQL_DATABASE", ""),
-    query={"charset": "utf8mb4"},
-)
-
-
-def add_message(old_messages: list[Message], new_message: list[Message]):
-    """Reducer function to append messages."""
-    if old_messages is None:
-        return new_message
-    return old_messages + new_message
+def append_messages(old: list[Message] | None, new: list[Message]) -> list[Message]:
+    return (old or []) + new
 
 
 class AppState(TypedDict):
-    messages: Annotated[list[Message], add_message]
-    status: str
+    messages: Annotated[list[Message], append_messages]
 
 
-def build_agent(use_redis: bool = True):
-    print("\n" + "=" * 60)
-    print("Example Agent: Complex State with Custom Objects")
-    print("=" * 60 + "\n")
+@Tool()
+def get_current_weather(location: str, unit: str = "celsius") -> str:
+    """Get the current weather for a location."""
+    return f"The weather in {location} is 22 degrees {unit}"
 
-    if use_redis:
-        checkpointer = RedisCheckpointer(
-            redis_url="redis://localhost:6379/0",
-            prefix="flowengine:",
-            ttl=3600,  # 1 hour TTL
-        )
-    else:
-        checkpointer = SQLCheckpointer(
-            connection_string=db_url.render_as_string(hide_password=False),
-            echo=False,  # Set to True to see SQL queries
-        )
 
-    # checkpointer = MemoryCheckpointer()
+@Tool()
+def get_current_time(location: str) -> str:
+    """Get the current time for a location."""
+    return f"The time in {location} is 09:00 AM"
 
-    # Define a sample tool
-    @Tool()
-    def get_current_weather(location: str, unit: str = "celsius") -> str:
-        return f"The weather in {location} is 22 degrees {unit}"
 
-    @Tool()
-    def get_current_time(location: str) -> str:
-        return f"The time in {location} is 09:00 AM"
-
-    model = BedrockConverseModel(
-        # model="amazon.nova-pro-v1:0",
-        # model="amazon.nova-pro-v1:0",
-        # model="us.anthropic.claude-3-5-haiku-20241022-v1:0",
-        # model="anthropic.claude-3-haiku-20240307-v1:0",
-        # model="us.meta.llama3-3-70b-instruct-v1:0",
-        model="amazon.nova-lite-v1:0",
-        config=BedrockConverseConfig(temperature=0.7),
+def build_agent() -> FlowEngine:
+    # model = GoogleAIGenerateModel(
+    #     model="gemini-2.5-flash-lite", config=GoogleAIGenerateConfig(temperature=0.7)
+    # )
+    model = OpenAIChatModel(
+        # model="gemma4:e4b",
+        model="qwen3.5:9b",
+        config=OpenAIChatConfig(temperature=0.7),
+        api_key="ollama",  # unused by Ollama, but required by the openai SDK client
+        base_url="http://localhost:11434/v1",  # Ollama proxy
     )
 
-    # model = OpenAIChatModel(model="gpt-4o-mini", config=OpenAIChatConfig())
-
-    llm = LLMfy(model, system_message="You are Hoki a helpfull assistant.")
+    llm = LLMfy(model, system_message="You are a helpful assistant.")
 
     tools = [get_current_weather, get_current_time]
-
-    # Register tool
     llm.register_tool(tools)
-
-    # Register to ToolRegistry
     tool_registry = ToolRegistry(tools, model)
 
-    flow = FlowEngine(state_schema=AppState, checkpointer=checkpointer)
+    def main_orchestrator(state: AppState) -> dict:
+        response = llm.chat(state["messages"])
+        return {"messages": [response.messages[-1]]}
 
-    def main_orchestrator(state: AppState):
-        messages = state.get("messages", [])
-        # for msg in messages:
-        #     print(f"- {msg}")
-        response = llm.chat(messages)
-        ai_response = response.messages[-1]
+    def tools_executor(state: AppState) -> dict:
+        results = tools_node(messages=state["messages"], registry=tool_registry)
+        return {"messages": results}
 
-        return {"messages": [ai_response], "status": "main"}
+    def should_continue(state: AppState) -> str:
+        last_message = state["messages"][-1]
+        return "tools" if last_message.tool_calls else END
 
-    def tools_executor(state):
-        tool_results = tools_node(
-            messages=state.get("messages", []),
-            registry=tool_registry,
-        )
-        return {"messages": tool_results}
-
-    def should_continue(state):
-        messages = state.get("messages", [])
-        last_message = messages[-1]
-        print("last_message :", last_message)
-        if last_message.tool_calls:
-            return "tools"
-        return END
-
+    flow = FlowEngine(AppState, checkpointer=InMemoryCheckpointer())
     flow.add_node("main", main_orchestrator)
     flow.add_node("tools", tools_executor)
-
     flow.add_edge(START, "main")
     flow.add_edge("tools", "main")
-    flow.add_conditional_edge("main", ["tools", END], should_continue)
+    flow.add_conditional_edges("main", should_continue, ["tools", END])
 
-    a = flow.build()
-
-    print(flow.visualize())
-
-    return a
-
-
-# ============================================================================
-# Main execution
-# ============================================================================
-
-agent = build_agent(use_redis=True)
-
-
-async def chat(message: str):
-    result = await agent.invoke(
-        {
-            "messages": [Message(role=Role.USER, content=message)],
-        },
-        session_id="cobalagi",
-    )
-    return cast(Message, result["messages"][-1])
+    return flow.build()
 
 
 async def main():
-    print("=== Terminal Chat ===")
-    print("Type 'exit' to quit.\n")
+    agent = build_agent()
+    print(agent.visualize())
+    session_id = "flowengine-agent-example"
 
+    print("=== FlowEngine agent (invoke) — type 'exit' to quit ===\n")
     while True:
-        user_msg = input("You: ")
-
-        if user_msg.strip().lower() in ["exit", "quit"]:
-            print("Chatbot: Goodbye! 👋")
+        user_input = input("You: ").strip()
+        if user_input.lower() in ("exit", "quit"):
             break
+        if not user_input:
+            continue
 
-        reply = await chat(user_msg)
-        print(f"Chatbot: {reply.content}")
+        result = await agent.invoke(
+            apply_state={"messages": [Message(role=Role.USER, content=user_input)]},
+            session_id=session_id,
+        )
+        reply = cast(Message, result["messages"][-1])
+        print(f"Assistant: {reply.content}\n")
 
 
 if __name__ == "__main__":

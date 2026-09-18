@@ -2,6 +2,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 
+from llmfy.flow_engine.execution.policy import RetryPolicy
+
 
 class NodeType(Enum):
     """Types of nodes in the workflow"""
@@ -26,3 +28,5 @@ class Node:
     sources: list[str] = field(default_factory=list)
     targets: list[str] = field(default_factory=list)
     stream: bool = field(default=False)
+    retry: RetryPolicy | None = None
+    timeout: float | None = None

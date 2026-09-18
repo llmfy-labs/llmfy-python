@@ -1,5 +1,6 @@
 from collections import defaultdict
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from llmfy.flow_engine.checkpointer.base_checkpointer import (
@@ -9,39 +10,88 @@ from llmfy.flow_engine.checkpointer.base_checkpointer import (
 
 
 class InMemoryCheckpointer(BaseCheckpointer):
-    """In-memory checkpoint storage backend."""
-    
-    def __init__(self):
-        """Initialize the memory checkpointer."""
+    """In-memory checkpoint storage backend.
+
+    Keeps live Python objects (via `deepcopy`) rather than crossing a
+    serialization boundary, so `state` never needs to go through
+    `checkpointer/serde.py`'s type registry — arbitrary objects in state
+    work here without being registered. For the same reason, it has no
+    `compress`/`encryption_key` options like `SQLCheckpointer`/
+    `RedisCheckpointer`: state here never leaves process memory as bytes,
+    so there is nothing to compress or encrypt.
+    """
+
+    requires_serialization = False
+
+    def __init__(
+        self,
+        max_checkpoints_per_session: int | None = None,
+        ttl_seconds: int | None = None,
+    ):
+        """Initialize the memory checkpointer.
+
+        Args:
+            max_checkpoints_per_session: If set, only the newest N
+                checkpoints are retained per session — older ones are
+                dropped on save. `None` (default) keeps every checkpoint
+                ever saved, matching the pre-existing unbounded behavior.
+            ttl_seconds: If set, checkpoints older than this age are dropped
+                on save (checked against wall-clock time, since this backend
+                has no native expiry). Independent of, and combinable with,
+                `max_checkpoints_per_session`.
+        """
         # Storage: session_id -> list of checkpoints
         self._storage: dict[str, list[Checkpoint]] = defaultdict(list)
         # Index: checkpoint_id -> (session_id, checkpoint)
         self._index: dict[str, tuple[str, Checkpoint]] = {}
-    
+        self.max_checkpoints_per_session = max_checkpoints_per_session
+        self.ttl_seconds = ttl_seconds
+
     async def save(self, checkpoint: Checkpoint) -> None:
         """
         Save a checkpoint to memory.
-        
+
         Args:
             checkpoint: The checkpoint to save
         """
         # Deep copy to prevent external modifications
         checkpoint_copy = deepcopy(checkpoint)
-        
+
         session_id = checkpoint.metadata.session_id
         checkpoint_id = checkpoint.metadata.checkpoint_id
-        
+
         # Add to storage
         self._storage[session_id].append(checkpoint_copy)
-        
-        # Sort by timestamp (newest first)
+
+        # Sort by created_at (newest first)
         self._storage[session_id].sort(
-            key=lambda c: c.metadata.timestamp,
+            key=lambda c: c.metadata.created_at,
             reverse=True
         )
-        
+
         # Add to index
         self._index[checkpoint_id] = (session_id, checkpoint_copy)
+
+        # Retention: drop checkpoints older than the configured TTL
+        if self.ttl_seconds is not None:
+            cutoff = datetime.now(UTC) - timedelta(seconds=self.ttl_seconds)
+            kept, expired = [], []
+            for c in self._storage[session_id]:
+                (expired if c.metadata.created_at < cutoff else kept).append(c)
+            if expired:
+                self._storage[session_id] = kept
+                for dropped in expired:
+                    self._index.pop(dropped.metadata.checkpoint_id, None)
+
+        # Retention: drop the oldest checkpoints beyond the configured cap
+        if self.max_checkpoints_per_session is not None:
+            overflow = self._storage[session_id][self.max_checkpoints_per_session:]
+            if overflow:
+                self._storage[session_id] = self._storage[session_id][
+                    : self.max_checkpoints_per_session
+                ]
+                for dropped in overflow:
+                    self._index.pop(dropped.metadata.checkpoint_id, None)
     
     async def load(self, session_id: str, checkpoint_id: str | None = None) -> Checkpoint | None:
         """

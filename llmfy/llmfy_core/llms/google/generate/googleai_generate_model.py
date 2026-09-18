@@ -298,7 +298,7 @@ class GoogleAIGenerateModel(BaseAIModel):
         Generate messages.
 
         Args:
-            messages (List[Dict[str, Any]]): Formatted messages from MessageTemp.get_messages().
+            messages (List[Dict[str, Any]]): Formatted messages from MessageBufferBuilder.get_messages().
             tools (Optional[List[Dict[str, Any]]], optional): Tool function definitions. Defaults to None.
 
         Returns:
@@ -390,7 +390,7 @@ class GoogleAIGenerateModel(BaseAIModel):
             (no incremental argument accumulation needed, unlike OpenAI).
 
         Args:
-            messages (List[Dict[str, Any]]): Formatted messages from MessageTemp.get_messages().
+            messages (List[Dict[str, Any]]): Formatted messages from MessageBufferBuilder.get_messages().
             tools (Optional[List[Dict[str, Any]]], optional): Tool function definitions. Defaults to None.
 
         Returns:

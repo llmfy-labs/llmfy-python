@@ -590,7 +590,7 @@ class BedrockConverseModel(BaseAIModel):
         events directly rather than a response dict carrying
         `ResponseMetadata` up front. This has no functional effect: `LLMfy`
         overwrites `request_call_id` on every tool call once a turn completes
-        anyway (see `MessageTemp.add_assistant_message`) — it only matters if
+        anyway (see `MessageBufferBuilder.add_assistant_message`) — it only matters if
         this method is called directly. Same pattern `GoogleAIGenerateModel`
         already uses for the same reason (no natural per-turn id available).
         """

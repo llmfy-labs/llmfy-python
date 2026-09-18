@@ -160,3 +160,130 @@ class ModelErrorException(LLMfyException):
     """Model processing error"""
 
     pass
+
+
+class GraphValidationException(LLMfyException):
+    """FlowEngine workflow graph is structurally invalid or misused.
+
+    Covers build-time and usage-order errors: undefined node references,
+    missing START/END path, reserved node names, self-loops, a join node
+    with a conditional predecessor, calling invoke()/stream() before
+    build(), or a checkpoint operation without a checkpointer configured.
+    """
+
+    pass
+
+
+class NodeExecutionException(LLMfyException):
+    """A FlowEngine node raised and all configured retry attempts were exhausted."""
+
+    def __init__(
+        self,
+        message: str,
+        node_name: str,
+        attempt: int,
+        status_code: int | None = None,
+        raw_error: Any | None = None,
+        provider: ServiceProvider | str | None = None,
+    ):
+        super().__init__(message, status_code, raw_error, provider)
+        self.node_name = node_name
+        self.attempt = attempt
+
+
+class NodeTimeoutException(NodeExecutionException):
+    """A FlowEngine node exceeded its configured timeout on its final attempt."""
+
+    def __init__(
+        self,
+        message: str,
+        node_name: str,
+        attempt: int,
+        timeout_seconds: float,
+        status_code: int | None = None,
+        raw_error: Any | None = None,
+        provider: ServiceProvider | str | None = None,
+    ):
+        super().__init__(message, node_name, attempt, status_code, raw_error, provider)
+        self.timeout_seconds = timeout_seconds
+
+
+class StepLimitExceededException(LLMfyException):
+    """A FlowEngine run exceeded its configured max_steps without reaching END."""
+
+    def __init__(
+        self,
+        message: str,
+        session_id: str,
+        step: int,
+        max_steps: int,
+        node_name: str | None = None,
+        status_code: int | None = None,
+        raw_error: Any | None = None,
+        provider: ServiceProvider | str | None = None,
+    ):
+        super().__init__(message, status_code, raw_error, provider)
+        self.session_id = session_id
+        self.step = step
+        self.max_steps = max_steps
+        self.node_name = node_name
+
+
+class CheckpointDeserializationException(LLMfyException):
+    """FlowEngine checkpoint state referenced a type that is not registered.
+
+    Raised on both save (an unregistered custom type in the state) and load
+    (a stored checkpoint tags a type the current process hasn't registered
+    via `FlowEngine(types=[...])` / `flow.register_type(...)`) — the engine
+    fails closed rather than silently degrading to a raw dict.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        type_name: str,
+        field_name: str | None = None,
+        status_code: int | None = None,
+        raw_error: Any | None = None,
+        provider: ServiceProvider | str | None = None,
+    ):
+        super().__init__(message, status_code, raw_error, provider)
+        self.type_name = type_name
+        self.field_name = field_name
+
+
+class CheckpointPayloadTooLargeException(LLMfyException):
+    """A checkpoint's serialized state exceeded the checkpointer's configured
+    `max_state_bytes` and was rejected before being written to storage."""
+
+    def __init__(
+        self,
+        message: str,
+        session_id: str,
+        size_bytes: int,
+        max_bytes: int,
+        status_code: int | None = None,
+        raw_error: Any | None = None,
+        provider: ServiceProvider | str | None = None,
+    ):
+        super().__init__(message, status_code, raw_error, provider)
+        self.session_id = session_id
+        self.size_bytes = size_bytes
+        self.max_bytes = max_bytes
+
+
+class InvalidSessionIdException(LLMfyException):
+    """A `session_id` passed to `FlowEngine.invoke()`/`stream()` failed the
+    checkpointer identifier allow-list (safe for use as a SQL primary key and
+    a Redis key-namespace segment)."""
+
+    def __init__(
+        self,
+        message: str,
+        session_id: str,
+        status_code: int | None = None,
+        raw_error: Any | None = None,
+        provider: ServiceProvider | str | None = None,
+    ):
+        super().__init__(message, status_code, raw_error, provider)
+        self.session_id = session_id

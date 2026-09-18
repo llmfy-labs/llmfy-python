@@ -53,6 +53,13 @@ def test_full_exception_hierarchy_is_exported():
         "RateLimitException",
         "ServiceUnavailableException",
         "TimeoutException",
+        "GraphValidationException",
+        "NodeExecutionException",
+        "NodeTimeoutException",
+        "StepLimitExceededException",
+        "CheckpointDeserializationException",
+        "CheckpointPayloadTooLargeException",
+        "InvalidSessionIdException",
     ]:
         assert name in llmfy.__all__
         assert issubclass(getattr(llmfy, name), llmfy.LLMfyException)
@@ -68,8 +75,28 @@ def test_version_is_exported_and_is_a_string():
     assert isinstance(llmfy.__version__, str)
 
 
-def test_flow_engine_still_exported_despite_being_excluded_from_this_test_suite():
-    # flow_engine has no NEW tests in this suite (it's about to be
-    # refactored), but its existing public exports must remain untouched.
-    for name in ["FlowEngine", "Edge", "Node", "START", "END", "WorkflowState"]:
+def test_flow_engine_core_names_are_exported_and_deprecated_state_helpers_are_gone():
+    # flow_engine's rewrite has its own full test suite under
+    # tests/flow_engine/ — this just guards the top-level public contract.
+    for name in [
+        "FlowEngine",
+        "Edge",
+        "Node",
+        "START",
+        "END",
+        "RetryPolicy",
+        "FlowEngineHooks",
+        "Send",
+        "BaseCheckpointer",
+        "InMemoryCheckpointer",
+        "RedisCheckpointer",
+        "SQLCheckpointer",
+    ]:
         assert name in llmfy.__all__
+
+    # WorkflowState/MemoryManager were deprecated, dead legacy code, removed
+    # entirely as part of the flow_engine rewrite — regression guard against
+    # them being reintroduced.
+    for name in ["WorkflowState", "MemoryManager"]:
+        assert name not in llmfy.__all__
+        assert not hasattr(llmfy, name)

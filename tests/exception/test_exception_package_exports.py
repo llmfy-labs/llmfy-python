@@ -37,4 +37,11 @@ def test_no_stray_extra_exports():
         "RateLimitException",
         "ServiceUnavailableException",
         "TimeoutException",
+        "GraphValidationException",
+        "NodeExecutionException",
+        "NodeTimeoutException",
+        "StepLimitExceededException",
+        "CheckpointDeserializationException",
+        "CheckpointPayloadTooLargeException",
+        "InvalidSessionIdException",
     }

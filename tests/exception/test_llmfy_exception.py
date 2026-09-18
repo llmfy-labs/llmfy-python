@@ -4,20 +4,30 @@ import pytest
 
 from llmfy.exception.llmfy_exception import (
     AuthenticationException,
+    CheckpointDeserializationException,
+    CheckpointPayloadTooLargeException,
     ContentFilterException,
+    GraphValidationException,
     InvalidRequestException,
+    InvalidSessionIdException,
     LLMfyException,
     ModelErrorException,
     ModelNotFoundException,
+    NodeExecutionException,
+    NodeTimeoutException,
     PermissionDeniedException,
     QuotaExceededException,
     RateLimitException,
     ServiceUnavailableException,
+    StepLimitExceededException,
     TimeoutException,
     TimeoutType,
 )
 
-# Every leaf subclass except TimeoutException has no added behavior — its own
+# Every leaf subclass except TimeoutException/NodeExecutionException/
+# NodeTimeoutException/StepLimitExceededException/
+# CheckpointDeserializationException/CheckpointPayloadTooLargeException/
+# InvalidSessionIdException has no added behavior — its own
 # __init__/__repr__ is inherited unmodified from LLMfyException.
 PLAIN_SUBCLASSES = [
     RateLimitException,
@@ -29,6 +39,7 @@ PLAIN_SUBCLASSES = [
     ServiceUnavailableException,
     ContentFilterException,
     ModelErrorException,
+    GraphValidationException,
 ]
 
 
@@ -132,3 +143,104 @@ class TestTimeoutTypeEnum:
         assert TimeoutType.WRITE.value == "write"
         assert TimeoutType.POOL.value == "pool"
         assert TimeoutType.MODEL.value == "model"
+
+
+class TestNodeExecutionException:
+    def test_stores_node_name_and_attempt(self):
+        exc = NodeExecutionException("boom", node_name="call_llm", attempt=3)
+        assert exc.node_name == "call_llm"
+        assert exc.attempt == 3
+        assert exc.message == "boom"
+
+    def test_inherits_base_fields(self):
+        exc = NodeExecutionException(
+            "boom", node_name="n", attempt=1, status_code=500, provider="openai"
+        )
+        assert exc.status_code == 500
+        assert exc.provider == "openai"
+
+    def test_is_llmfy_exception(self):
+        assert isinstance(NodeExecutionException("x", node_name="n", attempt=1), LLMfyException)
+
+
+class TestNodeTimeoutException:
+    def test_stores_timeout_seconds_and_base_fields(self):
+        exc = NodeTimeoutException(
+            "timed out", node_name="call_llm", attempt=2, timeout_seconds=30.0
+        )
+        assert exc.node_name == "call_llm"
+        assert exc.attempt == 2
+        assert exc.timeout_seconds == 30.0
+
+    def test_is_node_execution_exception(self):
+        exc = NodeTimeoutException("x", node_name="n", attempt=1, timeout_seconds=5.0)
+        assert isinstance(exc, NodeExecutionException)
+        assert isinstance(exc, LLMfyException)
+
+
+class TestStepLimitExceededException:
+    def test_stores_fields(self):
+        exc = StepLimitExceededException(
+            "too many steps", session_id="s1", step=101, max_steps=100, node_name="loop"
+        )
+        assert exc.session_id == "s1"
+        assert exc.step == 101
+        assert exc.max_steps == 100
+        assert exc.node_name == "loop"
+
+    def test_node_name_defaults_to_none(self):
+        exc = StepLimitExceededException("x", session_id="s1", step=1, max_steps=1)
+        assert exc.node_name is None
+
+    def test_is_llmfy_exception(self):
+        assert isinstance(
+            StepLimitExceededException("x", session_id="s1", step=1, max_steps=1),
+            LLMfyException,
+        )
+
+
+class TestCheckpointDeserializationException:
+    def test_stores_type_name_and_field_name(self):
+        exc = CheckpointDeserializationException(
+            "not registered", type_name="pkg.mod.Foo", field_name="messages"
+        )
+        assert exc.type_name == "pkg.mod.Foo"
+        assert exc.field_name == "messages"
+
+    def test_field_name_defaults_to_none(self):
+        exc = CheckpointDeserializationException("x", type_name="pkg.mod.Foo")
+        assert exc.field_name is None
+
+    def test_is_llmfy_exception(self):
+        assert isinstance(
+            CheckpointDeserializationException("x", type_name="t"), LLMfyException
+        )
+
+
+class TestCheckpointPayloadTooLargeException:
+    def test_stores_fields(self):
+        exc = CheckpointPayloadTooLargeException(
+            "too big", session_id="s1", size_bytes=200, max_bytes=100
+        )
+        assert exc.session_id == "s1"
+        assert exc.size_bytes == 200
+        assert exc.max_bytes == 100
+
+    def test_is_llmfy_exception(self):
+        assert isinstance(
+            CheckpointPayloadTooLargeException(
+                "x", session_id="s1", size_bytes=2, max_bytes=1
+            ),
+            LLMfyException,
+        )
+
+
+class TestInvalidSessionIdException:
+    def test_stores_session_id(self):
+        exc = InvalidSessionIdException("bad id", session_id="../etc/passwd")
+        assert exc.session_id == "../etc/passwd"
+
+    def test_is_llmfy_exception(self):
+        assert isinstance(
+            InvalidSessionIdException("x", session_id="s1"), LLMfyException
+        )

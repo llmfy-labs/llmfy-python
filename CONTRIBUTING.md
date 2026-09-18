@@ -21,12 +21,12 @@ Every push to `main` is scanned by `.github/workflows/auto-tag.yml`, which tags 
 
 | Commit subject | Bump |
 |---|---|
-| `[breaking-changes] <type>: ...` **or** `<type>!: ...` / `<type>(scope)!: ...` | **MAJOR** |
+| `[breaking-changes] <type>: ...` **or** `<type>!: ...` / `<type>(scope)!: ...` | **MINOR** (temporarily — see note below) |
 | `feat: ...` (no breaking marker) | **MINOR** |
 | `fix: ...` (no breaking marker) | **PATCH** |
 | `refactor:`, `chore:`, `ci:`, `docs:`, `test:` alone | no release (bundled into the next qualifying commit) |
 
-A breaking marker always forces MAJOR regardless of type — use it deliberately when a `feat` or `fix` must ship as a major version, e.g. `[breaking-changes] feat: ...` or `feat!: ...`, both equivalent.
+**Temporary, pre-1.0 only**: a breaking marker is currently capped at MINOR instead of MAJOR (see the `TEMPORARY` comment in `.github/workflows/auto-tag.yml`) — the package is still churning through frequent breaking changes pre-1.0, and a MAJOR bump per breaking commit isn't wanted yet. Once the API stabilizes, this reverts to the standard Conventional Commits rule: a breaking marker always forces MAJOR regardless of type, e.g. `[breaking-changes] feat: ...` or `feat!: ...`, both equivalent.
 
 ## Build package
 

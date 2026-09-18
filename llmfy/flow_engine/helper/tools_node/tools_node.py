@@ -53,16 +53,19 @@ def tools_stream_node(messages: list[Message], registry: ToolRegistry) -> Genera
     """
     new_messages = deepcopy(messages)
     last_message = new_messages[-1]
-    response = ToolNodeStreamResponse()
 
     if last_message.tool_calls:
         for tool_call in last_message.tool_calls:
-            # Executing
-            response.type = ToolNodeStreamType.EXECUTING
-            response.name = tool_call.name
-            response.arguments = tool_call.arguments
-            response.result = None
-            yield response
+            # Executing — a fresh response object per yield, since a
+            # consumer that collects yielded events (e.g. into a list)
+            # would otherwise see every prior event mutated to the last
+            # yielded state if a single object were reused.
+            yield ToolNodeStreamResponse(
+                type=ToolNodeStreamType.EXECUTING,
+                name=tool_call.name,
+                arguments=tool_call.arguments,
+                result=None,
+            )
 
             result = registry.execute_tool(
                 name=tool_call.name, arguments=tool_call.arguments
@@ -76,8 +79,9 @@ def tools_stream_node(messages: list[Message], registry: ToolRegistry) -> Genera
             )
 
             # Result
-            response.type = ToolNodeStreamType.RESULT
-            response.name = tool_call.name
-            response.arguments = tool_call.arguments
-            response.result = tool_result
-            yield response
+            yield ToolNodeStreamResponse(
+                type=ToolNodeStreamType.RESULT,
+                name=tool_call.name,
+                arguments=tool_call.arguments,
+                result=tool_result,
+            )

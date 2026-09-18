@@ -68,12 +68,12 @@ async def my_node(state: AppState) -> dict:
 
 ## State with Custom Objects
 
-State fields can hold any serialisable Python object. Custom objects are automatically serialised/deserialised when using checkpointers:
+State fields can hold any Python object. `InMemoryCheckpointer` keeps live objects (deep-copied) and needs nothing extra. `RedisCheckpointer` and `SQLCheckpointer` cross a JSON serialization boundary, though, so a custom type (a Pydantic `BaseModel` or `@dataclass`) used in state must be **registered explicitly** — an unregistered type raises `CheckpointDeserializationException` rather than silently degrading:
 
 ```python linenums="1"
 from typing import Annotated, List
 from typing_extensions import TypedDict
-from llmfy import Message
+from llmfy import FlowEngine, Message
 
 
 def add_messages(old: List[Message], new: List[Message]) -> List[Message]:
@@ -85,6 +85,12 @@ def add_messages(old: List[Message], new: List[Message]) -> List[Message]:
 class ChatState(TypedDict):
     messages: Annotated[List[Message], add_messages]
     session_id: str
+
+
+# Register at construction time...
+flow = FlowEngine(ChatState, checkpointer=redis_checkpointer, types=[Message])
+# ...or after the fact:
+flow.register_type(Message)
 ```
 
 ## Continuation with Reducers

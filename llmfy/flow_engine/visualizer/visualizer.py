@@ -39,6 +39,11 @@ class WorkflowVisualizer:
                 # Simple edges
                 for target in edge.targets:
                     mermaid.append(f"    {source} --> {target}")
+            elif edge.target_map is not None:
+                # Conditional edges with a {return_value: target} map — label
+                # each arrow with the key that routes to it.
+                for label, target in edge.target_map.items():
+                    mermaid.append(f"    {source} -.->|{label}| {target}")
             else:
                 # Conditional edges
                 for target in edge.targets:

@@ -133,7 +133,7 @@ def build_agent(use_redis: bool = True):
 
     flow.add_edge(START, "main")
     flow.add_edge("tools", "main")
-    flow.add_conditional_edge("main", ["tools", END], should_continue)
+    flow.add_conditional_edges("main", should_continue, ["tools", END])
 
     return flow.build()
 

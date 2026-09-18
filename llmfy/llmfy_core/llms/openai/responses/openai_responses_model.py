@@ -167,7 +167,7 @@ class OpenAIResponsesModel(BaseAIModel):
         return __call_stream_openai_responses_impl_async(params)
 
     def __to_responses_input(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Flattens `MessageTemp.get_messages()`'s output into the Responses API's
+        """Flattens `MessageBufferBuilder.get_messages()`'s output into the Responses API's
         flat `input` item array — unwrapping `OpenAIResponsesFormatter`'s
         private `{"__items__": [...]}` convention for messages that expand to
         more than one item (e.g. an assistant turn with several tool calls)."""

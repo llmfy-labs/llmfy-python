@@ -15,10 +15,9 @@ you can't check means either a genuine behavior gap in the port, or a
 deliberate, documented difference — which should be written down, not left
 silent.
 
-**Scope**: everything below mirrors `tests/`, which covers all of `llmfy/`
-**except `llmfy/flow_engine/`** — that module has no tests yet (a refactor is
-planned first) and is intentionally absent from this checklist too. It will
-get its own section here once that lands.
+**Scope**: everything below mirrors `tests/`, which covers all of `llmfy/`,
+including `llmfy/flow_engine/` (`tests/flow_engine/`, mirroring the
+package layout).
 
 Each section names its source test file(s) so behavior and proof stay linked.
 
@@ -85,7 +84,7 @@ Each section names its source test file(s) so behavior and proof stay linked.
 - [x] Unknown/extra fields on construction are rejected (strict schema).
 - [x] Role accepts a plain string and coerces it to the enum; an invalid role string is rejected.
 
-**`MessageTemp`** (`test_message_temp.py`) — in-memory, per-request chat history:
+**`MessageBufferBuilder`** (`test_message_buffer_builder.py`) — in-memory, per-request chat history:
 - [x] `add_system_message` always inserts at the **front** of history, not the end.
 - [x] Calling `add_system_message` twice keeps **both** (no dedup/replace) — most recent ends up frontmost.
 - [x] `add_user_message` appends with the given id.
@@ -288,7 +287,7 @@ formatting-specific logic is already covered above.
 - [x] Calling an unregistered tool name during the tool-calling loop raises a clean error (same guarantee as the standalone `ToolRegistry`).
 - [x] `chat`/`chat_with_tools` replaying a caller-supplied message history dispatches each message by its role (`user`/`assistant`/`tool`) to the matching history-builder method; a tool-role message carrying **multiple** `tool_results` only replays the **first** one (a documented truncation, not a crash).
 - [x] Streaming (`invoke_stream`/`chat_stream`): content chunks are yielded as they arrive and their text is accumulated; a **final terminal chunk** is always yielded after the stream ends, carrying an empty `AIResponse` (`content=None`) paired with the full accumulated message history — this is the signal consumers use to retrieve final history, and it must be distinguishable from a genuine empty-string content chunk (which is a separate, real edge case also verified: an empty-string chunk from the model is indistinguishable from "no content this chunk" by design).
-- [x] `clear_messages_temp()` empties the instance's conversation history.
+- [x] `LLMfy` builds a fresh, unshared message history for every `invoke`/`chat` call (no `messages_temp`/`clear_messages_temp()` public attribute) — reusing one instance for a second call must not see the first call's history, so concurrent calls on the same instance no longer race on shared conversation state.
 - [x] Every async method (`ainvoke`, `ainvoke_with_tools`, `achat`, `achat_with_tools`) mirrors its sync counterpart's behavior exactly, including the tool-execution-loop and exception-wrapping rules; `ainvoke_stream`/`achat_stream` are thread-offloaded wrappers around the sync streaming generator (not independently-implemented native async streams) and must be verified to produce identical output to their sync counterparts.
 
 ## Utilities: chunking & text preprocessing
@@ -321,3 +320,178 @@ formatting-specific logic is already covered above.
 - [x] The warning message assembles from whichever of `reason`/`version`/`alternative` were supplied, in a fixed order and format; a custom warning category is honored (defaults to `DeprecationWarning`).
 - [x] Function metadata (`__name__`, `__doc__`) is preserved on the wrapped function.
 - [x] Decorating a class returns the **same class object** (not a copy/subclass) — identity-preserving.
+
+## FlowEngine: edges, nodes & graph compilation
+*`tests/flow_engine/edge/`, `tests/flow_engine/node/`, `tests/flow_engine/graph/`, `tests/flow_engine/test_flow_engine_build_validate.py`*
+
+**`Edge`** (`edge/test_edge.py`)
+- [x] Constructor accepts a single target string or a list; a string target is normalized to a one-item list internally, a list target is kept as-is (both end up as the same `list[str]` shape on `.targets`).
+- [x] `condition`/`target_map` both default to `None` and are stored independently of `targets` (setting one doesn't affect the other).
+
+**`Node`** (`node/test_node.py`)
+- [x] Minimal construction only requires `name`/`node_type`; `sources`/`targets` default to independent empty lists per instance (not a shared mutable default across instances — a common dataclass footgun). `retry`/`timeout` are stored as given.
+- [x] `START` (`"__start__"`) and `END` (`"__end__"`) are distinct reserved string constants; `NodeType` has exactly 4 members (`START`, `END`, `FUNCTION`, `CONDITIONAL`).
+
+**Graph compilation** (`graph/test_graph_builder.py`) — `build_graph()` turns `nodes`/`edges` into a `CompiledGraph` once at `build()` time, replacing a linear scan of `edges` on every transition:
+- [x] `targets_of(node)` returns a node's static (non-conditional) outgoing targets; empty for a node with no outgoing edge or a conditional one (conditional targets are resolved at runtime, not statically).
+- [x] Two separate `add_edge(src, a)` / `add_edge(src, b)` calls from the same source compile into the **same** fan-out target list as a single `add_edge(src, [a, b])` call; a duplicate target across such calls is deduplicated, not repeated.
+- [x] `is_join(node)` is true only once a node has **more than one** non-conditional predecessor; a single predecessor, or a node reached only via a conditional edge, or `START` itself, never count as join predecessors — `START` is deliberately excluded so a node that's both the graph's entry point and a loop-back target doesn't wait forever for a second "arrival" that can never come, and a conditional edge's targets are excluded so a join never waits on a branch that (by definition, only one conditional target runs per pass) will never show up.
+- [x] `is_conditional(node)` is false for a node whose only outgoing edge is a regular (non-conditional) one.
+
+**Structural validation** (`graph/test_validation.py`) — `validate_workflow()`, run once at `build()`:
+- [x] A valid linear workflow, and one where `END` is only reachable via a conditional edge, both pass.
+- [x] Missing an edge out of `START`, missing any path to `END`, an edge referencing an undefined target node, and an edge sourced from an undefined node all raise.
+- [x] A node that has **both** a regular edge and a conditional edge as its source raises (ambiguous: which one fires?).
+- [x] A join node (multiple predecessors) whose predecessors are **all** regular edges passes; if even one of those predecessors reaches it via a conditional edge, it raises (a conditional predecessor might not actually run, so the join could wait forever).
+- [x] A node with no path from `START` at all only **warns**, it does not raise — a workflow can contain a deliberately-unreachable node (e.g. dead code during iteration) without failing `build()`.
+
+**`FlowEngine` builder methods** (`test_flow_engine_build_validate.py`)
+- [x] `_extract_state_annotations`: a plain (non-`Annotated`) field has no reducer; an `Annotated[Type, reducer_fn]` field extracts both the reducer and the inner type; a reducer that isn't callable, or doesn't take exactly 2 parameters, raises at `FlowEngine(...)` construction — before any node runs.
+- [x] `add_node`/`add_edge`/`add_conditional_edges` reject the reserved names `START`/`END` as a node name, reject `START` as any edge's target, reject `END` as any edge's source, and reject an edge that targets its own source (including inside a fan-out list) — all at call time, not deferred to `build()`.
+- [x] `add_edge`/`add_conditional_edges` correctly update each node's `sources`/`targets` bookkeeping as edges are added, including for a fan-out list target.
+- [x] `add_conditional_edges` marks its source node `CONDITIONAL` type automatically; the dict form (`{label: target}`) builds an edge whose `targets` is the dict's values and whose `target_map` is the dict itself; a dict value of `START` is rejected the same as the list form.
+- [x] `build()` returns `self` and sets `is_built = True`; calling `invoke()`/`stream()`/`details()` before `build()` raises `GraphValidationException`; `build()` itself surfaces the same structural errors as direct `validate_workflow()` calls (missing `START`/`END` path, undefined node reference).
+- [x] `details()` (after `build()`) lists every function/conditional node and every regular/conditional edge in a plain-text summary; `visualize()` returns a `mermaid.ink` URL.
+
+## FlowEngine: execution loop
+*`tests/flow_engine/execution/test_engine_loop.py`* — the core rewrite; these are the highest-value tests in the whole suite, proving the concurrency bug is fixed and every new capability (fan-out, retry, timeout, hooks, checkpoint metadata) behaves as documented.
+
+**Linear execution & reducers**
+- [x] A node's returned dict updates flow through each field's reducer (or replace, if unannotated) into `ctx.state`; `ctx.step` increments once per node executed (not per edge or per event).
+
+**Static fan-out / fan-in**
+- [x] A diamond graph (`fetch` → `[branch_a, branch_b]` → `combine`) runs `combine` **exactly once**, only after both branches complete, regardless of which branch finishes first (verified with both orderings of a `sleep()`-delayed branch) — reducers (e.g. a set-union reducer) let both branches' updates land without clobbering each other.
+- [x] Branches of a fan-out execute **concurrently, not sequentially** — verified by interleaved start/end ordering with different `sleep()` durations per branch (this is the specific concurrency bug the rewrite fixes).
+
+**Concurrency safety across calls**
+- [x] Two `invoke()`-equivalent runs on the **same** `EngineLoop` instance, driven concurrently via `asyncio.gather`, never corrupt each other's state — each `ExecutionContext` is independent per call.
+
+**Step limit**
+- [x] A conditional self-loop with no exit condition trips `StepLimitExceededException` once `ctx.step` reaches the configured `max_steps` (the exception carries `max_steps` and `session_id`); a loop that terminates before the limit completes normally.
+
+**Retry** (`RetryPolicy`)
+- [x] A node that fails transiently succeeds once attempts reach a matching result, retried up to `max_attempts`; exhausting all attempts raises `NodeExecutionException` carrying `node_name`, the final `attempt` count, and the original exception as `__cause__`. The default policy (no `retry=` passed) means exactly one attempt, no retry.
+
+**Timeout**
+- [x] A node exceeding its configured per-attempt `timeout` raises `NodeTimeoutException` carrying `node_name` and `timeout_seconds`.
+
+**Hooks**
+- [x] `on_node_start`/`on_node_end` each fire exactly once per node, in order, with the expected `(name, state)`/`(name, state, updates)` arguments; `on_error` fires with `(name, exception_type)` and the exception still propagates afterward (the hook observes, never suppresses).
+
+**Streaming nodes**
+- [x] A `stream=True` node's `STREAM`-type yields surface as `node_stream` events in order, and its single terminal `RESULT`-type yield becomes exactly one `node_result` event whose `state` merges into `ctx.state`; a stream node yielding anything other than a `NodeStreamResponse` raises `GraphValidationException`.
+
+**Checkpointer integration**
+- [x] `InMemoryCheckpointer` (`requires_serialization = False`) accepts an unregistered custom object in state and round-trips it via deep-copy with no type registry needed. A checkpointer with `requires_serialization = True` (standing in for Redis/SQL) raises `CheckpointDeserializationException` for the same unregistered type, and saves it as a safe, codec-tagged dict (`{"__type__": ..., "data": ...}`) once the type is registered via a `TypeRegistry`.
+
+**Checkpoint metadata: `prev_node`**
+- [x] A run's first node records `prev_node = START`; a linear chain's second node records its actual predecessor's name; every branch of a *static* fan-out records the fan-out source as `prev_node`; a *dynamic* (`Send`) fan-out's single aggregate checkpoint records the node that dispatched the `Send`s (not any individual branch — branches don't get their own checkpoints at all).
+
+**Checkpoint metadata: `attempt` / `updated_fields` / `dispatch_id`**
+- [x] `attempt` is `1` on a first-try success, and reflects the actually-winning retry count on both a plain node and a streaming node (the streaming path threads the winning attempt back via a separate mutable holder, since an async generator can't itself return a value — a distinct code path worth its own test).
+- [x] `dispatch_id` is `None` for every regular (non-`Send`) checkpoint.
+- [x] `updated_fields` exactly matches the node's own returned keys (`[]` when a node returns nothing).
+- [x] A dynamic fan-out's single aggregate checkpoint has `attempt = None` (no single attempt count applies across N independently-retried branches committed together) but a non-`None` `dispatch_id`, and `updated_fields` is the union of every branch's returned keys.
+
+**Dynamic fan-out (`Send`)**
+- [x] N `Send`s to the same node run once per `Send` and reduce (join downstream) exactly once, regardless of N; an empty `list[Send]` from the router produces no branch execution and no further graph advance at all; a single bare `Send` (not wrapped in a list) is accepted the same as a one-item list.
+- [x] A `Send` targeting a node not declared in that conditional edge's `targets` raises `GraphValidationException` naming the undeclared target; `Send`s in one routing call targeting two *different* declared nodes raises ("must target the same node"); a list mixing `Send` and non-`Send` items raises ("non-Send item").
+- [x] `Send.state` fully **replaces** the branch's input — the branch function never sees the router's parent state, only what was passed to `Send(...)`; the branch's own **returned** updates still merge into shared state normally via the field's reducer.
+- [x] `on_node_start`/`on_node_end` hooks and stream events for a branch reflect only that branch's own (replaced) state, never the parent's shared state — even though a downstream reader (e.g. a later `on_node_end`) sees the *dispatch's* state as it looked **before** commit (see next bullet).
+- [x] Sizing `max_steps`: a dispatch of N `Send`s counts the router node plus all N branches toward the step count (e.g. router + 10 branches against `max_steps=5` trips `StepLimitExceededException`).
+- [x] `retry`/`timeout` configured on the target node apply **independently per branch** (a flaky branch retries on its own; one slow branch timing out doesn't wait for/affect siblings).
+- [x] `on_node_start`/`on_node_end` fire once per branch (not once per dispatch); `on_branch_start`/`on_branch_end` fire *in addition*, also once per branch, carrying `(name, branch_index, branch_total, ...)` — and are **not** fired at all for a plain node or a static fan-out branch (those already have distinct node names, so there's nothing to correlate).
+- [x] **Atomic commit**: if any one branch raises, `NodeExecutionException` propagates and `ctx.state` is left **completely untouched** by the dispatch — including updates from sibling branches that finished successfully before the failure (verified with a fast, successfully-completing branch racing a slow, failing one). Exactly **one** checkpoint is saved for a successful N-branch dispatch (never N, never N+1 for N branches plus a downstream join node correctly getting its own); a failed dispatch saves **no** checkpoint for the dispatching node at all.
+- [x] `on_node_end` for a branch sees state **as of just before** the dispatch's atomic commit — a field the branch itself just set is not yet visible in the `state` argument that hook call receives, even though it *is* visible on `ctx.state` right after the whole dispatch finishes.
+- [x] `branch_index`/`branch_total`/`dispatch_id` populate correctly across a dispatch's `node_result` stream events (indices cover `0..N-1` exactly once, every event shares one `branch_total` and one non-`None` `dispatch_id`) and differ between two separate dispatches (even to the same node, even across different sessions); all three are `None` for every event outside a dynamic fan-out (plain nodes, static fan-out).
+
+## FlowEngine: `RetryPolicy` & `FlowEngineHooks` (unit-level)
+*`tests/flow_engine/execution/test_policy.py`, `tests/flow_engine/execution/test_hooks.py`*
+
+**`RetryPolicy`**
+- [x] Defaults: `max_attempts=1` (no retry), `retry_on=(Exception,)`, `backoff_seconds=0.0`.
+- [x] `should_retry(exc)` matches configured exception types (and their subclasses) via `isinstance`, and rejects unmatched types.
+- [x] `delay_for_attempt(n)` grows exponentially by `backoff_multiplier` per attempt past the first, honors a custom multiplier, and is always `0.0` regardless of attempt number when `backoff_seconds` is `0`.
+
+**`FlowEngineHooks`**
+- [x] All 5 callback fields (`on_node_start`, `on_node_end`, `on_error`, `on_branch_start`, `on_branch_end`) default to `None`.
+- [x] Both sync and async callables are accepted and stored as given (dispatch-time awaiting is the engine loop's job, not validated here).
+- [x] `on_error` receives exactly `(node_name, exception)`.
+
+## FlowEngine: `Send` (dynamic fan-out primitive)
+*`tests/flow_engine/execution/test_send.py`*
+
+- [x] Constructor stores `node`/`state` as given; two `Send`s are equal iff both `node` and `state` match, unequal if either differs.
+- [x] `node`/`state` cannot be reassigned after construction (immutable) — a deliberate guarantee that a `Send` dispatched into the engine can't be mutated out from under it mid-flight.
+
+## FlowEngine: public `invoke()`/`stream()` API
+*`tests/flow_engine/test_flow_engine_execution.py`, `tests/flow_engine/test_flow_engine_stream.py`*
+
+- [x] `invoke()` returns the final state dict; `apply_state` seeds the initial state before the first node runs.
+- [x] A conditional edge routes to its declared target both in list form (return value is the target name) and dict form (return value is a key into `target_map`); an unrecognized dict-form return value raises. A loop-back edge to the entry node keeps looping until the condition routes to `END`.
+- [x] Static fan-out and `Send`-based dynamic fan-out both work end-to-end through the public `add_edge`/`add_conditional_edges` API (not just the lower-level `EngineLoop` used by the execution-loop tests above); `stream()` events for a `Send` dispatch carry the branch correlation ids described above.
+- [x] The instance's `max_steps` (constructor default) applies when a call doesn't override it; a per-call `max_steps` argument overrides the instance default for that one call only.
+- [x] `add_node(..., retry=...)` retries a transiently-failing node through the full public `invoke()` path (not just the engine loop directly); `FlowEngineHooks` fire during a real `invoke()` call.
+- [x] Two different `session_id`s driven through the same built `FlowEngine` do not corrupt each other's state (the public-API-level equivalent of the concurrency-safety test above).
+- [x] `stream()` yields a `start` event, then one `result` event per node for a non-streaming node; a `stream=True` node yields its `STREAM` chunks as `stream`-type events followed by one `result` event. A loop-back edge to the entry node keeps looping under `stream()` the same as under `invoke()`.
+
+## FlowEngine: tool-calling helpers
+*`tests/flow_engine/helper/`*
+
+**`tool_trim_messages`** (`test_messages_trimmer.py`) — see the function's own docstring in `helper/messages_trimmer/messages_trimmer.py` for the full forward-scan mechanism; tests pin these outcomes:
+- [x] A single-message history is returned as-is (too short to trim).
+- [x] With no active tool cycle (last message isn't a tool result and no tool call is unresolved) — including right after a fully-resolved tool cycle followed by plain conversation turns — history is aggressively trimmed to just the last message.
+- [x] A **pending** tool call (no result yet) protects every message from that tool-calling `ASSISTANT` message onward; the trimmable prefix before it anchors to the last **non-`TOOL`** message so the result never starts with an orphaned tool result — including when that means returning only the protected suffix (nothing usable before it) or skipping past several consecutive prior tool results to find a real anchor.
+- [x] The **last** message being a tool result also protects context from its triggering `ASSISTANT` message onward, even if every tool call is already "resolved" (a just-completed round still needs its context preserved for the orchestrator to process next).
+- [x] **Parallel tool calls** in one `ASSISTANT` message (several `tool_calls` in a single turn) are all preserved together — the protection boundary is the assistant message, not the individual tool call.
+
+**`tools_node` / `tools_stream_node`** (`test_tools_node.py`)
+- [x] `tools_node` executes every pending tool call from the last message via the registry and returns one `Message(role=TOOL)` per call, matching each call's `tool_call_id`; with no pending tool calls it returns an empty list.
+- [x] `tools_node` does not mutate the caller's input `messages` list (works off a defensive deep copy).
+- [x] `tools_stream_node` yields `EXECUTING` (name + arguments) before each tool call runs, then `RESULT` (carrying the `Message`) after — and yields nothing at all when there are no pending tool calls.
+
+## FlowEngine: streaming response types
+*`tests/flow_engine/stream/`*
+
+**`FlowEngineStreamType`** (`test_flow_engine_stream_response.py`)
+- [x] A `str`-enum, same as the other stream-type enums in the package; members compare equal to their plain string value; exact member set/values pinned.
+- [x] `FlowEngineStreamResponse`'s fields (`type`, `node`, `content`, `state`, `error`, `branch_index`, `branch_total`, `dispatch_id`) all default to `None`; each is settable at construction.
+
+## FlowEngine: visualizer
+*`tests/flow_engine/visualizer/test_visualizer.py`*
+
+- [x] The generated Mermaid diagram includes every node's name.
+- [x] A regular edge renders as a solid arrow; a conditional edge renders as a dashed arrow labeled with the condition's possible return values; a dict-form (`target_map`) conditional edge labels each arrow with its dict key rather than a generic label.
+- [x] A fan-out edge (list target) produces one arrow per target, not a single merged arrow.
+- [x] `generate_diagram_url` produces a valid `mermaid.ink` URL with the diagram base64-encoded into it.
+
+## FlowEngine: checkpoint storage (`InMemoryCheckpointer`, `SQLCheckpointer`, `RedisCheckpointer`)
+*`tests/flow_engine/checkpointer/`, `tests/flow_engine/test_flow_engine_checkpoint_resume.py`*
+
+**Custom-type registry** (`checkpointer/serde.py`, `test_serde.py`) — what `StateCodec`'s tagging (below) is built on:
+- [x] `TypeRegistry` registers and resolves both a Pydantic `BaseModel` and a `@dataclass` by name (also accepts an initial `types=[...]` list at construction); resolving an unregistered name returns `None` rather than raising; registering a plain class (neither a `BaseModel` nor a `@dataclass`) raises.
+- [x] `serialize_state`: JSON-native values (str/int/float/bool/None/list/dict) pass through untouched; a registered type anywhere in state — top-level, nested inside a dataclass, or inside a list — is tagged as `{"__type__": ..., "data": ...}`; an **unregistered** custom type, or any other unsupported type, raises at save time (never silently drops data).
+- [x] `deserialize_state` round-trips a registered Pydantic model, dataclass, a dataclass nested inside another, and a list of a registered type, back to real objects; an unregistered type tag raises at load time; a tampered/unknown `__type__` tag raises **without ever attempting to import or instantiate** whatever it names (no arbitrary-code-execution surface from a corrupted or maliciously-crafted checkpoint); a plain dict with no type tag at all passes through unchanged.
+
+**Wire-format codec** (`checkpointer/codec.py`, `test_codec.py`)
+- [x] `StateCodec` round-trips a JSON-safe state dict through every combination of zlib compression and Fernet encryption (both off, either alone, both together) — order is compress-then-encrypt on encode, reversed on decode, since ciphertext doesn't compress.
+- [x] Encrypted output does not contain any recognizable plaintext substring from the original state.
+- [x] A serialized state exceeding the configured `max_state_bytes` raises `CheckpointPayloadTooLargeException` **before** anything is written; `max_state_bytes=None` disables the check entirely.
+- [x] Constructing a codec with `encryption_key` set but the `cryptography` package unavailable raises a clear, actionable `LLMfyException` (install instructions), not a bare `ImportError`; constructing one with no `encryption_key` never even attempts the import.
+
+**Retention (count-cap + TTL)** — all three backends
+- [x] `max_checkpoints_per_session`: only the newest N checkpoints survive a `save()`; older ones become unreachable by `load(checkpoint_id=...)`. Unset (`None`, the default) preserves the pre-existing unbounded behavior. Enforcement is scoped per `session_id` — pruning one session never touches another's checkpoints.
+- [x] `ttl_seconds`: checkpoints older than the configured age are dropped on the next `save()` for that session; combinable with `max_checkpoints_per_session` at the same time. `InMemoryCheckpointer` checks age against wall-clock time (no native expiry); `SQLCheckpointer` runs an indexed `DELETE ... WHERE timestamp < cutoff` scoped to the session (with `synchronize_session=False`, since these deletes never need to reconcile with in-memory ORM objects — evaluating them locally instead risks comparing a naive datetime, as reloaded by SQLite after a commit, against Python's timezone-aware cutoff); `RedisCheckpointer`'s pre-existing `ttl` remains a **sliding, whole-session** expiry (refreshed via `EXPIRE` on every save) — a distinct mechanism from per-checkpoint count/age retention, not a replacement for it.
+
+**SQL storage** (`sql_checkpointer.py`, `test_sql_checkpointer.py`)
+- [x] `state` is stored as a codec-encoded binary column (`LargeBinary`, `LONGBLOB` on MySQL to avoid its 64KB plain-`BLOB` cap) rather than JSON text — encryption round-trips end-to-end through the real column type, and decrypting with the wrong Fernet key fails loudly (`InvalidToken`) rather than silently returning garbage.
+- [x] `echo=True` (SQL statement logging) is documented as unsafe for production once `encryption_key` isn't set, since it logs bound parameters as-is.
+
+**Redis storage** (`redis_checkpointer.py`, `test_redis_checkpointer.py`)
+- [x] Checkpoint metadata (id, session, timestamp, node, step) stays plain JSON; only the `state` field is codec-encoded then base64-wrapped so it can still live inside the same JSON payload — `list()` (which calls `load()` per entry) transparently benefits from decoding, compression, and decryption without its own logic.
+- [x] Count-cap retention deletes both the overflowing checkpoints' data keys and their sorted-set membership together, so neither survives independently of the other.
+
+**`session_id` validation** (`flow_engine.py`, `test_flow_engine_checkpoint_resume.py`)
+- [x] A caller-supplied `session_id` must match `^[A-Za-z0-9_.:-]{1,255}$` or `FlowEngine.invoke()`/`stream()` raises `InvalidSessionIdException` before ever reaching a checkpointer — this is the single enforcement point shared by all three backends, since a malformed id is a write-path risk (unexpected Redis key-namespace segments, oversized SQL primary keys), not a read-path one.
+- [x] An **empty string** `session_id` is falsy and is replaced by an auto-generated `uuid4()` before the regex check ever runs — same pre-existing treatment as `None`, not a new rejection case.
+- [x] Engine-generated `checkpoint_id`s (always `uuid.uuid4()`) never pass through this check — only a caller-supplied `session_id` does.

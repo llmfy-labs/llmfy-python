@@ -1,14 +1,21 @@
 from .llmfy_exception import (
     AuthenticationException,
+    CheckpointDeserializationException,
+    CheckpointPayloadTooLargeException,
     ContentFilterException,
+    GraphValidationException,
     InvalidRequestException,
+    InvalidSessionIdException,
     LLMfyException,
     ModelErrorException,
     ModelNotFoundException,
+    NodeExecutionException,
+    NodeTimeoutException,
     PermissionDeniedException,
     QuotaExceededException,
     RateLimitException,
     ServiceUnavailableException,
+    StepLimitExceededException,
     TimeoutException,
 )
 
@@ -24,4 +31,11 @@ __all__ = [
     "RateLimitException",
     "ServiceUnavailableException",
     "TimeoutException",
+    "GraphValidationException",
+    "NodeExecutionException",
+    "NodeTimeoutException",
+    "StepLimitExceededException",
+    "CheckpointDeserializationException",
+    "CheckpointPayloadTooLargeException",
+    "InvalidSessionIdException",
 ]

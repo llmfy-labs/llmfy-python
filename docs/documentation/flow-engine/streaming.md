@@ -34,8 +34,10 @@ from llmfy.flow_engine.stream.flow_engine_stream_response import (
 | `type` | `str` | Event type (`FlowEngineStreamType`) |
 | `node` | `str` | Name of the node that produced the event |
 | `content` | `Any` | Streamed content (string, `ToolNodeStreamResponse`, etc.) |
-| `state` | `dict` | Updated workflow state (only on `RESULT`) |
+| `state` | `dict` | Snapshot after this event (see the dynamic fan-out caveat under [Hooks](nodes-edges.md#hooks): during a `Send` dispatch, a branch's own event sees state as of *before* the dispatch, not yet including its own update) |
 | `error` | `Any` | Error details (only on `ERROR`) |
+| `branch_index` / `branch_total` | `int \| None` | This branch's 0-based index and the dispatch's total branch count — set only for a dynamic (`Send`) fan-out branch, `None` otherwise |
+| `dispatch_id` | `str \| None` | Shared by every branch of one `Send` dispatch, unique across dispatches — lets you tell "tool call 2 of 3" apart when every branch shares the same `node` name |
 
 ### NodeStreamResponse
 

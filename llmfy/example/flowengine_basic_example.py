@@ -1,105 +1,63 @@
+"""
+Basic FlowEngine example: a linear node, a conditional loop, and a reducer
+on the state schema. No LLM/provider required — runs standalone.
+"""
+
 import asyncio
-from typing import Annotated
+from typing import Annotated, TypedDict
 
-from dotenv import load_dotenv
-from typing_extensions import TypedDict
-
-from llmfy import (
-    END,
-    START,
-    FlowEngine,
-)
-
-load_dotenv()
+from llmfy import END, START, FlowEngine
 
 
-# Example 1: Simple workflow with annotated state
-def add_message(old: str, new: str):
-    """Update function for messages list - concatenates old and new"""
-    if old is None:
-        return new
-    print("ANNOTATED")
-    print(f"OLD: {old}")
-    print(f"NEW: {new}")
-    return old + new
+def append_log(old: list[str] | None, new: list[str]) -> list[str]:
+    """Reducer: concatenate log entries instead of replacing them."""
+    return (old or []) + new
 
 
 class AppState(TypedDict):
-    messages: Annotated[list[str], add_message]
-    # messages:list[str]
-    status: str
+    log: Annotated[list[str], append_log]
     counter: int
 
 
-async def main_node(state: AppState) -> dict:
-    """Main processing node"""
-    print(f"\n✅ Main node executing with state: {state}")
-    counter = state.get("counter", 0)
-    counter += 1
-    response = [f"Hey ini output ke {counter}"]
-    return {
-        "messages": response,
-        "status": "processing",
-        "counter": counter,
-    }
+async def start_node(state: AppState) -> dict:
+    return {"log": ["started"], "counter": 0}
 
 
-async def loop_node(state: AppState) -> dict:
-    """Loop node"""
-    print(f"✅ Loop node executing with state: {state}")
-    return {"status": "completed"}
+async def increment_node(state: AppState) -> dict:
+    counter = state["counter"] + 1
+    return {"log": [f"increment -> {counter}"], "counter": counter}
 
 
-async def condition(state: AppState) -> str:
-    counter = state.get("counter", 0)
-
-    if counter == 3:
-        return END
-    elif counter == 2:
-        return "node_tiga"
-    return "loop_node"
-
-async def node3(state: AppState):
-    return {}
+def keep_looping(state: AppState) -> str:
+    # Returns a semantic label rather than a node name directly — the dict
+    # passed to add_conditional_edges below maps each label to its target
+    # (LangGraph-style routing).
+    return "continue" if state["counter"] < 3 else "stop"
 
 
-async def example_simple_workflow():
-    """Example of a simple linear workflow"""
-    print("\n" + "=" * 60)
-    print("Example 1: Simple Linear Workflow")
-    print("=" * 60)
-
+async def main():
     flow = FlowEngine(AppState)
 
-    # Add nodes
-    flow.add_node("main_node", main_node)
-    flow.add_node("loop_node", loop_node)
-    flow.add_node("node_tiga", node3)
+    flow.add_node("start", start_node)
+    flow.add_node("increment", increment_node)
 
-    # Add edges
-    flow.add_edge(START, "main_node")
-    # flow.add_edge("main_node", "loop_node")
-    flow.add_conditional_edge("main_node", ["loop_node","node_tiga", END], condition)
-    flow.add_edge("loop_node", "main_node")
-    flow.add_edge("node_tiga", "main_node")
+    flow.add_edge(START, "start")
+    flow.add_edge("start", "increment")
+    flow.add_conditional_edges(
+        "increment", keep_looping, {"continue": "increment", "stop": END}
+    )
 
-    # Build
     flow.build()
 
-    # Visualize
     print(flow.details())
-    print(flow.visualize())
+    print(f"\nDiagram: {flow.visualize()}\n")
 
-    # Execute
-    print("\nExecuting workflow...\n")
-    result = await flow.invoke({"messages": ["hello"], "status": "started"})
-
-    print(f"\nFinal state: {result}")
-    print(f"Messages (using annotated add function): {result['messages']}")
-
-
-async def run():
-    await example_simple_workflow()
+    result = await flow.invoke()
+    print(f"Final counter: {result['counter']}")
+    print("Log:")
+    for entry in result["log"]:
+        print(f"  - {entry}")
 
 
-asyncio.run(run())
+if __name__ == "__main__":
+    asyncio.run(main())

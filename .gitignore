@@ -65,3 +65,6 @@ llmfy/_version.py
 .coverage.*
 htmlcov/
 .pytest_cache/
+
+
+*output/

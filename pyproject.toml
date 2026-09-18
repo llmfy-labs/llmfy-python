@@ -50,6 +50,7 @@ numpy = ["numpy"]
 typing_extensions = ["typing_extensions"]
 redis = ["redis"]
 SQLAlchemy = ["SQLAlchemy"]
+crypto = ["cryptography"]
 all = [
     "openai",
     "boto3",
@@ -60,6 +61,7 @@ all = [
     "typing_extensions",
     "redis",
     "SQLAlchemy",
+    "cryptography",
 ]
 
 [dependency-groups]
@@ -75,6 +77,7 @@ dev = [
     "SQLAlchemy>=2.0.44",
     "typing_extensions>=4.15.0",
     "PyMySQL>=1.1.2",
+    "cryptography>=42.0.0",
 ]
 docs = [
     "mkdocs>=1.6.1",

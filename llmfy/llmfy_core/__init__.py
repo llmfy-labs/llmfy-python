@@ -34,14 +34,21 @@ from .llms import (
     OpenAIResponsesPromptCachingConfig,
     OpenAIResponsesReasoningConfig,
 )
-from .messages import Content, ContentType, Message, MessageTemp, Role, ToolCall
+from .messages import (
+    Content,
+    ContentType,
+    Message,
+    MessageBufferBuilder,
+    Role,
+    ToolCall,
+)
 from .responses import AIResponse, GenerationResponse
 from .tools import Tool, ToolRegistry
 from .usage import LLMfyUsage, llmfy_usage_tracker
 
 __all__ = [
     "LLMfy",
-    "MessageTemp",
+    "MessageBufferBuilder",
     "AnthropicMessagesConfig",
     "AnthropicMessagesThinkingConfig",
     "AnthropicMessagesPromptCachingConfig",

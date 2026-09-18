@@ -18,7 +18,7 @@ class ModelFormatter(ABC):
     """ModelFormatter.
 
     Register all derivated intances from this class to:
-        - `MessageTemp` class at `llmfy/chat/messages/message_temp.py`
+        - `MessageBufferBuilder` class at `llmfy/llmfy_core/messages/message_buffer_builder.py`
         - `Tool` class at `llmfy/chat/tools/tool.py`
 
     Args:

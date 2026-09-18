@@ -1,7 +1,7 @@
 """Shared pytest fixtures for the llmfy test suite.
 
-Scope: everything under `llmfy/` EXCEPT `llmfy/flow_engine/` (excluded on
-purpose — see CLAUDE.md / the test-suite plan for why).
+Scope: everything under `llmfy/`, including `llmfy/flow_engine/` (its own
+suite lives under `tests/flow_engine/`, mirroring the package layout).
 
 Mocking strategy: provider SDKs (openai, boto3, anthropic, google-genai) are
 all real, lightweight packages installed via the `dev`/`test` dependency

@@ -86,7 +86,7 @@ author to even think about it:
   structure validation *and* silently falls back to the bundled default
   pricing table, rather than using an empty table. `None` and `{}` are not
   equivalent to a caller in the way they might expect.
-- `MessageTemp.clear()` keeps only the most-recently-inserted system message
+- `MessageBufferBuilder.clear()` keeps only the most-recently-inserted system message
   if multiple were ever added (since `add_system_message` always inserts at
   index 0) — not "the first one," not "all of them."
 - Google's cache-discount math computes the *full* input price first and

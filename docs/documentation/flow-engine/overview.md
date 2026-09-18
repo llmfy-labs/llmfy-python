@@ -88,18 +88,23 @@ from llmfy import FlowEngine
 
 | Method | Description |
 |--------|-------------|
-| `FlowEngine(state_schema, checkpointer=None)` | Create engine with a TypedDict state schema and optional checkpointer |
-| `add_node(name, func, stream=False)` | Add a processing node. Set `stream=True` for generator nodes |
-| `add_edge(source, target)` | Add a direct transition between nodes |
-| `add_conditional_edge(source, targets, condition)` | Add conditional routing: `condition(state) -> str` returns the next node name |
+| `FlowEngine(state_schema, checkpointer=None, max_steps=100, types=None, hooks=None)` | Create engine with a TypedDict state schema, optional checkpointer, step-limit guard, custom types for checkpoint (de)serialization, and observability hooks |
+| `register_type(cls)` | Register a custom type (Pydantic `BaseModel` or `@dataclass`) that appears in state and must cross a Redis/SQL checkpointer's serialization boundary — equivalent to passing it in `types=[...]` at construction |
+| `add_node(name, func, stream=False, retry=None, timeout=None)` | Add a processing node. Set `stream=True` for generator nodes; `retry` takes a `RetryPolicy`, `timeout` a per-attempt seconds limit |
+| `add_edge(source, target)` | Add a direct transition. `target` can be a list (or `add_edge` called more than once from the same source) for static fan-out |
+| `add_conditional_edges(source, condition_func, targets)` | Add conditional routing: `condition_func(state)` returns a target name (list form), a dict key (dict form), or a `Send`/`list[Send]` for dynamic fan-out |
 | `build()` | Validate and compile the workflow. Returns the built `FlowEngine` |
-| `invoke(apply_state, session_id=None)` | Run the workflow synchronously. Returns the final state dict |
-| `stream(apply_state, session_id=None)` | Run the workflow with streaming. Returns an async generator of `FlowEngineStreamResponse` |
+| `invoke(apply_state=None, session_id=None, max_steps=None)` | Run the workflow synchronously. Returns the final state dict |
+| `stream(apply_state=None, session_id=None, max_steps=None)` | Run the workflow with streaming. Returns an async generator of `FlowEngineStreamResponse` |
 | `get_state(session_id)` | Retrieve the latest checkpointed state for a session |
+| `get_checkpoint(session_id, checkpoint_id=None)` | Retrieve one specific checkpoint, or the latest if `checkpoint_id` is omitted |
+| `list_checkpoints(session_id, limit=10)` | List checkpoint metadata for a session, newest first |
+| `delete_checkpoints(session_id, checkpoint_id=None)` | Delete one checkpoint, or every checkpoint for the session if `checkpoint_id` is omitted |
 | `reset_session(session_id)` | Clear all checkpoints for a session (start fresh) |
-| `list_checkpoints(session_id, limit=10)` | List checkpoint metadata for a session |
 | `details()` | Print a text representation of the workflow graph |
 | `visualize()` | Return a Mermaid diagram URL for the workflow |
+
+See [Nodes & Edges](nodes-edges.md) for static/dynamic fan-out, retry/timeout, and hooks; [Checkpointer](checkpointer.md) for `types`/`register_type`, retention, and compression/encryption.
 
 ## Visualization
 
