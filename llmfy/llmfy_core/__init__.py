@@ -43,11 +43,15 @@ from .messages import (
     ToolCall,
 )
 from .responses import AIResponse, GenerationResponse
+from .retry import LLMRetryPolicy, RetryEvent, SDKRetryConfig
 from .tools import Tool, ToolRegistry
 from .usage import LLMfyUsage, llmfy_usage_tracker
 
 __all__ = [
     "LLMfy",
+    "LLMRetryPolicy",
+    "RetryEvent",
+    "SDKRetryConfig",
     "MessageBufferBuilder",
     "AnthropicMessagesConfig",
     "AnthropicMessagesThinkingConfig",

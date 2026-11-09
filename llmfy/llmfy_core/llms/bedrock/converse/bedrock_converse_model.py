@@ -22,6 +22,7 @@ from llmfy.llmfy_core.llms.bedrock.converse.bedrock_converse_config import (
 from llmfy.llmfy_core.messages.tool_call import ToolCall
 from llmfy.llmfy_core.model_backend import ModelBackend
 from llmfy.llmfy_core.responses.ai_response import AIResponse
+from llmfy.llmfy_core.retry.sdk_retry_config import SDKRetryConfig, botocore_config
 from llmfy.llmfy_core.service_provider import ServiceProvider
 
 
@@ -47,6 +48,8 @@ class BedrockConverseModel(BaseAIModel):
         aws_access_key_id: str | None = None,
         aws_secret_access_key: str | None = None,
         aws_bedrock_region: str | None = None,
+        sdk_retry: SDKRetryConfig | None = None,
+        client_config: Any | None = None,
     ):
         """
         BedrockConverseModel
@@ -60,6 +63,13 @@ class BedrockConverseModel(BaseAIModel):
                 the `AWS_SECRET_ACCESS_KEY` environment variable if not provided.
             aws_bedrock_region (str, optional): AWS Bedrock region. Defaults to the
                 `AWS_BEDROCK_REGION` environment variable if not provided.
+            sdk_retry (SDKRetryConfig, optional): botocore retry/timeout settings;
+                setting `max_attempts` switches botocore to `"standard"` retry mode.
+                Defaults to None (botocore defaults).
+            client_config (botocore.config.Config, optional): Extra botocore client
+                config (e.g. `Config(max_pool_connections=32)`), used for both the
+                sync and the aioboto3 client. `sdk_retry` overrides its retry and
+                timeout fields. Defaults to None.
         """
         config = config if config is not None else BedrockConverseConfig()
         if boto3 is None:
@@ -90,11 +100,13 @@ class BedrockConverseModel(BaseAIModel):
         self.provider = ServiceProvider.BEDROCK
         self.model_name = model
         self.config = config
+        self._client_config = botocore_config(sdk_retry, client_config)
         self.client = boto3.client(
             "bedrock-runtime",
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             region_name=aws_bedrock_region,
+            config=self._client_config,
         )
         # Native async support for `agenerate`/`agenerate_stream` needs the
         # optional `aioboto3` dependency — boto3 itself has no async mode.
@@ -189,7 +201,7 @@ class BedrockConverseModel(BaseAIModel):
         @track_bedrock_converse_usage
         async def _call_bedrock_impl_async(params: dict[str, Any]):
             try:
-                async with cast(Any, session.client("bedrock-runtime")) as client:
+                async with cast(Any, session.client("bedrock-runtime", config=self._client_config)) as client:
                     return await client.converse(**params)
             except (ClientError, ReadTimeoutError, ConnectTimeoutError) as e:
                 raise handle_bedrock_error(e) from e
@@ -225,7 +237,7 @@ class BedrockConverseModel(BaseAIModel):
         @track_bedrock_converse_stream_usage_async
         async def _call_stream_bedrock_impl_async(params: dict[str, Any]):
             try:
-                async with cast(Any, session.client("bedrock-runtime")) as client:
+                async with cast(Any, session.client("bedrock-runtime", config=self._client_config)) as client:
                     response = await client.converse_stream(**params)
                     async for event in response["stream"]:
                         yield event

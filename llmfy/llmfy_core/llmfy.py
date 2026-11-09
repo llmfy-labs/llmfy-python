@@ -1,6 +1,13 @@
 import re
 import uuid
-from collections.abc import AsyncGenerator, Callable, Generator
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterable,
+    Awaitable,
+    Callable,
+    Generator,
+    Iterable,
+)
 from typing import Any
 
 from llmfy.exception.llmfy_exception import LLMfyException
@@ -12,6 +19,13 @@ from llmfy.llmfy_core.messages.role import Role
 from llmfy.llmfy_core.messages.tool_call import ToolCall
 from llmfy.llmfy_core.responses.ai_response import AIResponse
 from llmfy.llmfy_core.responses.generation_response import GenerationResponse
+from llmfy.llmfy_core.retry.llm_retry_policy import LLMRetryPolicy
+from llmfy.llmfy_core.retry.retry_runner import (
+    agenerate_with_retry,
+    astream_with_retry,
+    generate_with_retry,
+    stream_with_retry,
+)
 from llmfy.llmfy_core.tools.tool import Tool
 
 
@@ -25,6 +39,7 @@ class LLMfy:
         llm: BaseAIModel,
         system_message: str | None = None,
         input_variables: list[str] | None = None,
+        retry: LLMRetryPolicy | None = None,
     ):
         """
         LLMfy init.
@@ -34,8 +49,13 @@ class LLMfy:
             system_message (Optional[str], optional): System message/prompt. Defaults to None.
             input_variables (Optional[List[str]], optional): Input variables, Required if in system message there are placeholder var `{{var_name}}`.
                 Example: ["var_name_1", "var_name_2"]. Defaults to None.
+            retry (Optional[LLMRetryPolicy], optional): Retry policy applied to every
+                model round trip this instance makes (each tool-calling round trip
+                separately, so tools never re-run). Defaults to None (no retry on
+                top of the SDK's own).
         """
         self.model: BaseAIModel = llm
+        self.retry = retry
         self.system_message = system_message
         self.input_variables = input_variables or []
         self._tools: dict[str, Callable] = {}
@@ -86,6 +106,59 @@ class LLMfy:
     def __get_tool_definitions(self) -> list[dict[str, Any]]:
         """Get all tool definitions registered with this framework."""
         return list(self._tool_definitions.values())
+
+    # -- model round trips (retry-aware) -----------------------------------
+    #
+    # Every model call goes through one of these four helpers. Each attempt
+    # rebuilds the provider payload from `messages_temp`, so a retry never
+    # reuses a list an earlier attempt may have mutated.
+
+    def __model_label(self) -> str:
+        return getattr(self.model, "model_name", type(self.model).__name__)
+
+    def __generate(self, messages_temp: MessageBufferBuilder) -> AIResponse:
+        def call() -> AIResponse:
+            return self.model.generate(
+                messages_temp.get_messages(backend=self.model.backend),
+                tools=self.__get_tool_definitions(),
+            )
+
+        if self.retry is None:
+            return call()
+        return generate_with_retry(self.retry, self.__model_label(), call)
+
+    async def __agenerate(self, messages_temp: MessageBufferBuilder) -> AIResponse:
+        def call() -> Awaitable[AIResponse]:
+            return self.model.agenerate(
+                messages_temp.get_messages(backend=self.model.backend),
+                tools=self.__get_tool_definitions(),
+            )
+
+        if self.retry is None:
+            return await call()
+        return await agenerate_with_retry(self.retry, self.__model_label(), call)
+
+    def __generate_stream(self, messages_temp: MessageBufferBuilder) -> Iterable[Any]:
+        def open_stream() -> Iterable[Any]:
+            return self.model.generate_stream(
+                messages_temp.get_messages(backend=self.model.backend),
+                tools=self.__get_tool_definitions(),
+            )
+
+        if self.retry is None:
+            return open_stream()
+        return stream_with_retry(self.retry, self.__model_label(), open_stream)
+
+    def __agenerate_stream(self, messages_temp: MessageBufferBuilder) -> AsyncIterable[Any]:
+        def open_stream() -> AsyncIterable[Any]:
+            return self.model.agenerate_stream(
+                messages_temp.get_messages(backend=self.model.backend),
+                tools=self.__get_tool_definitions(),
+            )
+
+        if self.retry is None:
+            return open_stream()
+        return astream_with_retry(self.retry, self.__model_label(), open_stream)
 
     def __execute_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         """Execute a registered tool."""
@@ -250,10 +323,7 @@ class LLMfy:
             messages_temp = MessageBufferBuilder()
             self.__prepare_invoke_history(messages_temp, contents, **kwargs)
 
-            response = self.model.generate(
-                messages_temp.get_messages(backend=self.model.backend),
-                tools=self.__get_tool_definitions(),
-            )
+            response = self.__generate(messages_temp)
 
             messages_temp.add_assistant_message(
                 id=str(uuid.uuid4()),
@@ -290,10 +360,7 @@ class LLMfy:
             self.__prepare_invoke_history(messages_temp, contents, **kwargs)
 
             while True:
-                response = self.model.generate(
-                    messages_temp.get_messages(backend=self.model.backend),
-                    tools=self.__get_tool_definitions(),
-                )
+                response = self.__generate(messages_temp)
 
                 if response.tool_calls:
                     messages_temp.add_assistant_message(
@@ -377,10 +444,7 @@ class LLMfy:
                         message.content if message.content else "",
                     )
 
-            stream = self.model.generate_stream(
-                messages_temp.get_messages(backend=self.model.backend),
-                tools=self.__get_tool_definitions(),
-            )
+            stream = self.__generate_stream(messages_temp)
 
             full_content = ""
             final_tool_calls = None
@@ -449,10 +513,7 @@ class LLMfy:
             messages_temp = MessageBufferBuilder()
             self.__prepare_chat_history(messages_temp, messages, **kwargs)
 
-            response = self.model.generate(
-                messages_temp.get_messages(backend=self.model.backend),
-                tools=self.__get_tool_definitions(),
-            )
+            response = self.__generate(messages_temp)
 
             messages_temp.add_assistant_message(
                 id=str(uuid.uuid4()),
@@ -485,10 +546,7 @@ class LLMfy:
             self.__prepare_chat_history(messages_temp, messages, **kwargs)
 
             while True:
-                response = self.model.generate(
-                    messages_temp.get_messages(backend=self.model.backend),
-                    tools=self.__get_tool_definitions(),
-                )
+                response = self.__generate(messages_temp)
 
                 if response.tool_calls:
                     messages_temp.add_assistant_message(
@@ -586,10 +644,7 @@ class LLMfy:
                         backend=self.model.backend,
                     )
 
-            stream = self.model.generate_stream(
-                messages_temp.get_messages(backend=self.model.backend),
-                tools=self.__get_tool_definitions(),
-            )
+            stream = self.__generate_stream(messages_temp)
 
             full_content = ""
             final_tool_calls = None
@@ -683,10 +738,7 @@ class LLMfy:
             messages_temp = MessageBufferBuilder()
             self.__prepare_invoke_history(messages_temp, contents, **kwargs)
 
-            response = await self.model.agenerate(
-                messages_temp.get_messages(backend=self.model.backend),
-                tools=self.__get_tool_definitions(),
-            )
+            response = await self.__agenerate(messages_temp)
 
             messages_temp.add_assistant_message(
                 id=str(uuid.uuid4()),
@@ -712,10 +764,7 @@ class LLMfy:
             self.__prepare_invoke_history(messages_temp, contents, **kwargs)
 
             while True:
-                response = await self.model.agenerate(
-                    messages_temp.get_messages(backend=self.model.backend),
-                    tools=self.__get_tool_definitions(),
-                )
+                response = await self.__agenerate(messages_temp)
 
                 if response.tool_calls:
                     messages_temp.add_assistant_message(
@@ -759,10 +808,7 @@ class LLMfy:
             messages_temp = MessageBufferBuilder()
             self.__prepare_invoke_history(messages_temp, contents, **kwargs)
 
-            stream = self.model.agenerate_stream(
-                messages_temp.get_messages(backend=self.model.backend),
-                tools=self.__get_tool_definitions(),
-            )
+            stream = self.__agenerate_stream(messages_temp)
 
             full_content = ""
             final_tool_calls = None
@@ -818,10 +864,7 @@ class LLMfy:
             messages_temp = MessageBufferBuilder()
             self.__prepare_chat_history(messages_temp, messages, **kwargs)
 
-            response = await self.model.agenerate(
-                messages_temp.get_messages(backend=self.model.backend),
-                tools=self.__get_tool_definitions(),
-            )
+            response = await self.__agenerate(messages_temp)
 
             messages_temp.add_assistant_message(
                 id=str(uuid.uuid4()),
@@ -847,10 +890,7 @@ class LLMfy:
             self.__prepare_chat_history(messages_temp, messages, **kwargs)
 
             while True:
-                response = await self.model.agenerate(
-                    messages_temp.get_messages(backend=self.model.backend),
-                    tools=self.__get_tool_definitions(),
-                )
+                response = await self.__agenerate(messages_temp)
 
                 if response.tool_calls:
                     messages_temp.add_assistant_message(
@@ -886,10 +926,7 @@ class LLMfy:
             messages_temp = MessageBufferBuilder()
             self.__prepare_chat_history(messages_temp, messages, **kwargs)
 
-            stream = self.model.agenerate_stream(
-                messages_temp.get_messages(backend=self.model.backend),
-                tools=self.__get_tool_definitions(),
-            )
+            stream = self.__agenerate_stream(messages_temp)
 
             full_content = ""
             final_tool_calls = None

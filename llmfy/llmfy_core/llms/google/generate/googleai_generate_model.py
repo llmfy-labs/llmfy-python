@@ -15,6 +15,7 @@ from llmfy.llmfy_core.llms.google.generate.googleai_generate_config import (
 from llmfy.llmfy_core.messages.tool_call import ToolCall
 from llmfy.llmfy_core.model_backend import ModelBackend
 from llmfy.llmfy_core.responses.ai_response import AIResponse
+from llmfy.llmfy_core.retry.sdk_retry_config import SDKRetryConfig, google_http_options
 from llmfy.llmfy_core.service_provider import ServiceProvider
 
 
@@ -40,6 +41,7 @@ class GoogleAIGenerateModel(BaseAIModel):
         model: str,
         config: GoogleAIGenerateConfig | None = None,
         api_key: str | None = None,
+        sdk_retry: SDKRetryConfig | None = None,
     ):
         """
         GoogleAIGenerateModel
@@ -49,6 +51,9 @@ class GoogleAIGenerateModel(BaseAIModel):
             config (GoogleAIGenerateConfig, optional): Configuration. Defaults to GoogleAIGenerateConfig().
             api_key (str, optional): Google AI API key. Defaults to the `GOOGLE_API_KEY`
                 environment variable if not provided.
+            sdk_retry (SDKRetryConfig, optional): `google-genai` retry/timeout settings
+                (`HttpOptions.retry_options`, `HttpOptions.timeout`). `connect_timeout`
+                is ignored. Defaults to None (the SDK does not retry by default).
         """
         config = config if config is not None else GoogleAIGenerateConfig()
         if genai is None:
@@ -65,7 +70,12 @@ class GoogleAIGenerateModel(BaseAIModel):
                 "Please provide `GOOGLE_API_KEY` on your environment or pass `api_key`!"
             )
 
-        self.client = genai.Client(api_key=api_key)
+        http_options = google_http_options(sdk_retry)
+        self.client = (
+            genai.Client(api_key=api_key, http_options=http_options)
+            if http_options is not None
+            else genai.Client(api_key=api_key)
+        )
         self.backend = ModelBackend.GOOGLE_GENERATE
         self.provider = ServiceProvider.GOOGLE
         self.model_name = model

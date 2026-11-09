@@ -34,6 +34,7 @@ nav:
           - Tool Calling: documentation/features/tool-calling.md
           - Thinking Config: documentation/features/thinking-config.md
           - Prompt Caching: documentation/features/prompt-caching.md
+          - Retry: documentation/features/retry.md
       - Embeddings:
           - Embeddings: documentation/features/embedding.md
           - Chunking: documentation/features/chunk-text.md

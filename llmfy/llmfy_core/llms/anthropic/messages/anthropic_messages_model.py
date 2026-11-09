@@ -16,6 +16,10 @@ from llmfy.llmfy_core.llms.base_ai_model import BaseAIModel
 from llmfy.llmfy_core.messages.tool_call import ToolCall
 from llmfy.llmfy_core.model_backend import ModelBackend
 from llmfy.llmfy_core.responses.ai_response import AIResponse
+from llmfy.llmfy_core.retry.sdk_retry_config import (
+    SDKRetryConfig,
+    httpx_sdk_client_options,
+)
 from llmfy.llmfy_core.service_provider import ServiceProvider
 
 
@@ -38,6 +42,7 @@ class AnthropicMessagesModel(BaseAIModel):
         api_key: str | None = None,
         base_url: str | None = None,
         default_headers: dict[str, str] | None = None,
+        sdk_retry: SDKRetryConfig | None = None,
     ):
         """
         AnthropicMessagesModel
@@ -53,6 +58,9 @@ class AnthropicMessagesModel(BaseAIModel):
                 request, passed straight through to the `anthropic` SDK client. Needed for
                 endpoints that require headers beyond `x-api-key`/`anthropic-version` — e.g.
                 Bedrock Mantle's `anthropic-workspace-id` header for Workspace scoping.
+            sdk_retry (SDKRetryConfig, optional): `anthropic` SDK retry/timeout settings
+                (`max_retries`, `timeout`) for both the sync and async client.
+                Defaults to None (SDK defaults).
         """
         config = config if config is not None else AnthropicMessagesConfig()
         if anthropic is None:
@@ -70,14 +78,21 @@ class AnthropicMessagesModel(BaseAIModel):
         self.provider = ServiceProvider.ANTHROPIC
         self.model_name = model
         self.config = config
+        sdk_options = httpx_sdk_client_options(sdk_retry, anthropic)
         self.client = anthropic.Anthropic(
-            api_key=api_key, base_url=base_url, default_headers=default_headers
+            api_key=api_key,
+            base_url=base_url,
+            default_headers=default_headers,
+            **sdk_options,
         )
         # Native async client for `agenerate` — same credentials/config as
         # `self.client`, built eagerly (cheap: no connection opened until the
         # first request).
         self.async_client = anthropic.AsyncAnthropic(
-            api_key=api_key, base_url=base_url, default_headers=default_headers
+            api_key=api_key,
+            base_url=base_url,
+            default_headers=default_headers,
+            **sdk_options,
         )
 
     def __call_anthropic(self, params: dict[str, Any]):
