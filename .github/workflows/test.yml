@@ -23,6 +23,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # GitHub's ubuntu runners don't ship uv, so `uvx` must be installed first.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
       - name: Lint
         run: uvx ruff check --statistics .
 
