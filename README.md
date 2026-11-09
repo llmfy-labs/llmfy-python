@@ -28,6 +28,7 @@ See complete documentation at [https://llmfy.readthedocs.io/](https://llmfy.read
       - PostgreSQL (async: [asyncpg](https://pypi.org/project/asyncpg/), sync: [psycopg2](https://pypi.org/project/psycopg2/)) — 🔸 optional.
       - MySQL (async: [aiomysql](https://pypi.org/project/aiomysql/), sync: [pymysql](https://pypi.org/project/PyMySQL/)) — 🔸 optional.
       - SQLite (async: [aiosqlite](https://pypi.org/project/aiosqlite/), sync: built-in) — 🔸 optional.
+      - Async drivers also need `pip install "sqlalchemy[asyncio]"` (for `greenlet`); sync drivers don't.
 
 ### Using UV
 ```sh

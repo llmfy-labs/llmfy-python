@@ -6,14 +6,25 @@ DB layer, since sqlite is self-contained and fast. `aiosqlite` isn't in the
 dev dependency group, so these tests exercise the sync code path
 (`sqlite:///...`), which is exactly as real a test of the SQL logic as the
 async path — both funnel through the same `CheckpointModel`/statements.
+
+The sync path must also work without `greenlet` (SQLAlchemy >= 2.1 only
+installs it via the `sqlalchemy[asyncio]` extra), which is how the dev group
+resolves today; `TestDriverAvailability` pins that down explicitly.
 """
 
+import subprocess
+import sys
+import textwrap
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from cryptography.fernet import Fernet, InvalidToken
 
-from llmfy.exception.llmfy_exception import CheckpointPayloadTooLargeException
+from llmfy.exception.llmfy_exception import (
+    CheckpointPayloadTooLargeException,
+    LLMfyException,
+)
+from llmfy.flow_engine.checkpointer import sql_checkpointer
 from llmfy.flow_engine.checkpointer.base_checkpointer import (
     Checkpoint,
     CheckpointMetadata,
@@ -218,3 +229,74 @@ class TestRetention:
             assert await cp.load("s1", checkpoint_id="c-new") is not None
         finally:
             await cp.close()
+
+
+class TestDriverAvailability:
+    def test_sync_driver_works_without_asyncio_extension(self, tmp_path):
+        # Simulates SQLAlchemy >= 2.1 without `greenlet`, where importing
+        # `sqlalchemy.ext.asyncio` raises ImportError. Runs in a fresh
+        # interpreter so blocking that import can't leak into other tests,
+        # and so the result doesn't depend on whether this environment
+        # happens to have `greenlet` installed.
+        script = textwrap.dedent(
+            """
+            import asyncio
+            import sys
+            from datetime import UTC, datetime
+
+            sys.modules["sqlalchemy.ext.asyncio"] = None  # import -> ImportError
+
+            from llmfy.flow_engine.checkpointer import sql_checkpointer as m
+            from llmfy.flow_engine.checkpointer.base_checkpointer import (
+                Checkpoint,
+                CheckpointMetadata,
+            )
+
+            assert m.SQLALCHEMY_AVAILABLE is True
+            assert m.SQLALCHEMY_ASYNC_AVAILABLE is False
+
+            async def main():
+                cp = m.SQLCheckpointer("sqlite:///" + sys.argv[1])
+                try:
+                    await cp.save(
+                        Checkpoint(
+                            metadata=CheckpointMetadata(
+                                checkpoint_id="c1",
+                                session_id="s1",
+                                run_id="r1",
+                                created_at=datetime.now(UTC),
+                                node="n",
+                                prev_node="__start__",
+                                step=1,
+                                updated_fields=[],
+                                attempt=1,
+                                dispatch_id=None,
+                            ),
+                            state={"ok": True},
+                        )
+                    )
+                    loaded = await cp.load("s1")
+                    assert loaded is not None and loaded.state == {"ok": True}
+                finally:
+                    await cp.close()
+
+            asyncio.run(main())
+            print("OK")
+            """
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(tmp_path / "checkpoints.db")],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip().endswith("OK")
+
+    def test_async_connection_string_without_asyncio_extension_raises(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(sql_checkpointer, "SQLALCHEMY_ASYNC_AVAILABLE", False)
+
+        with pytest.raises(LLMfyException, match=r"sqlalchemy\[asyncio\]"):
+            SQLCheckpointer(f"sqlite+aiosqlite:///{tmp_path / 'checkpoints.db'}")

@@ -492,6 +492,7 @@ formatting-specific logic is already covered above.
 **SQL storage** (`sql_checkpointer.py`, `test_sql_checkpointer.py`)
 - [x] `state` is stored as a codec-encoded binary column (`LargeBinary`, `LONGBLOB` on MySQL to avoid its 64KB plain-`BLOB` cap) rather than JSON text — encryption round-trips end-to-end through the real column type, and decrypting with the wrong Fernet key fails loudly (`InvalidToken`) rather than silently returning garbage.
 - [x] `echo=True` (SQL statement logging) is documented as unsafe for production once `encryption_key` isn't set, since it logs bound parameters as-is.
+- [x] The sync driver path (`sqlite:///...`) works when SQLAlchemy's asyncio extension can't be imported (SQLAlchemy 2.1+ without `greenlet`): only async connection strings are disabled, and those raise a clear `LLMfyException` pointing at `pip install "sqlalchemy[asyncio]"` instead of the whole checkpointer reporting SQLAlchemy as missing.
 
 **Redis storage** (`redis_checkpointer.py`, `test_redis_checkpointer.py`)
 - [x] Checkpoint metadata (id, session, timestamp, node, step) stays plain JSON; only the `state` field is codec-encoded then base64-wrapped so it can still live inside the same JSON payload — `list()` (which calls `load()` per entry) transparently benefits from decoding, compression, and decryption without its own logic.
