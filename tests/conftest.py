@@ -13,10 +13,12 @@ only the network-call method (e.g. `client.chat.completions.create`).
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Generator
+from types import ModuleType
 from typing import Any
 
 import pytest
 
+from llmfy.exception._httpx_compat import httpx_modules
 from llmfy.llmfy_core.llms.base_ai_model import BaseAIModel
 from llmfy.llmfy_core.model_backend import ModelBackend
 from llmfy.llmfy_core.responses.ai_response import AIResponse
@@ -34,6 +36,16 @@ def provider_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATESTDUMMY")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-dummy-secret")
     monkeypatch.setenv("AWS_BEDROCK_REGION", "us-east-1")
+
+
+@pytest.fixture(params=httpx_modules(), ids=lambda module: module.__name__)
+def httpx_mod(request: pytest.FixtureRequest) -> ModuleType:
+    """Each installed httpx-family package (`httpx2` and/or `httpx`), one run per package.
+
+    Current provider SDKs raise `httpx2` exceptions and older ones raise
+    `httpx` exceptions; tests taking this fixture prove both are handled.
+    """
+    return request.param
 
 
 class FakeAIModel(BaseAIModel):

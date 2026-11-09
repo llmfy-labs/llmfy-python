@@ -9,16 +9,20 @@ formatter machinery.
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import httpx
 import openai
 import pytest
 
+from llmfy.exception._httpx_compat import httpx_modules
 from llmfy.exception.llmfy_exception import LLMfyException, RateLimitException
 from llmfy.llmfy_core.llms.openai.responses.openai_responses_model import (
     OpenAIResponsesModel,
 )
 from llmfy.llmfy_core.model_backend import ModelBackend
 from llmfy.llmfy_core.service_provider import ServiceProvider
+
+# The HTTP package the provider SDK builds requests/responses with: `httpx2` on
+# current SDK releases, `httpx` on older ones.
+httpx = httpx_modules()[0]
 
 
 @pytest.fixture

@@ -8,12 +8,15 @@ dispatch logic directly rather than the SDK's own exception construction
 (out of scope: that's the provider SDK's code, not ours).
 
 `handle_bedrock_error` and `handle_google_error` DO use `isinstance` against
-real SDK exception types, so those are tested against real `botocore`/`httpx`/
+real SDK exception types, so those are tested against real `botocore`/`httpx2`/
 `google-genai` exception instances (all installed via the `dev`/`test`
 dependency groups — no network, no real credentials needed to construct them).
+
+Timeout tests take the shared `httpx_mod` fixture (tests/conftest.py), which
+runs them once per installed httpx-family package (`httpx2` and/or `httpx`): current provider SDKs raise
+`httpx2` exceptions, older ones `httpx`, and the handlers must map both.
 """
 
-import httpx
 from botocore.exceptions import ClientError, ConnectTimeoutError, ReadTimeoutError
 from google.genai import errors as google_errors
 
@@ -207,16 +210,16 @@ class TestHandleOpenAIError:
         assert "request_id" not in result.raw_error  # type: ignore
         assert "body" not in result.raw_error  # type: ignore
 
-    def test_timeout_error_with_connect_cause(self):
+    def test_timeout_error_with_connect_cause(self, httpx_mod):
         e = _fake_exception("APITimeoutError", "timed out")
-        e.__cause__ = httpx.ConnectTimeout("connect timeout")
+        e.__cause__ = httpx_mod.ConnectTimeout("connect timeout")
         result = handle_openai_error(e)
         assert isinstance(result, TimeoutException)
         assert result.timeout_type == TimeoutType.CONNECT
 
-    def test_timeout_error_with_read_cause(self):
+    def test_timeout_error_with_read_cause(self, httpx_mod):
         e = _fake_exception("APITimeoutError", "timed out")
-        e.__cause__ = httpx.ReadTimeout("read timeout")
+        e.__cause__ = httpx_mod.ReadTimeout("read timeout")
         result = handle_openai_error(e)
         assert result.timeout_type == TimeoutType.READ  # type: ignore
 
@@ -256,31 +259,31 @@ class TestHandleAnthropicError:
         assert type(result) is LLMfyException
         assert result.provider == ServiceProvider.ANTHROPIC
 
-    def test_timeout_with_write_cause(self):
+    def test_timeout_with_write_cause(self, httpx_mod):
         e = _fake_exception("APITimeoutError", "timed out")
-        e.__cause__ = httpx.WriteTimeout("write timeout")
+        e.__cause__ = httpx_mod.WriteTimeout("write timeout")
         result = handle_anthropic_error(e)
         assert isinstance(result, TimeoutException)
         assert result.timeout_type == TimeoutType.WRITE
 
 
 class TestHandleGoogleError:
-    def test_timeout_exception_maps_by_exact_type(self):
-        e = httpx.ReadTimeout("read timeout")
+    def test_timeout_exception_maps_by_exact_type(self, httpx_mod):
+        e = httpx_mod.ReadTimeout("read timeout")
         result = handle_google_error(e)
         assert isinstance(result, TimeoutException)
         assert result.timeout_type == TimeoutType.READ
         assert result.provider == ServiceProvider.GOOGLE
 
-    def test_timeout_exception_status_code_stays_none(self):
+    def test_timeout_exception_status_code_stays_none(self, httpx_mod):
         # Unlike the bedrock/openai/anthropic timeout branches, google's
-        # httpx.TimeoutException branch never sets status_code.
-        e = httpx.PoolTimeout("pool timeout")
+        # httpx/httpx2 TimeoutException branch never sets status_code.
+        e = httpx_mod.PoolTimeout("pool timeout")
         result = handle_google_error(e)
         assert result.status_code is None
 
-    def test_pool_timeout_type(self):
-        e = httpx.PoolTimeout("pool timeout")
+    def test_pool_timeout_type(self, httpx_mod):
+        e = httpx_mod.PoolTimeout("pool timeout")
         result = handle_google_error(e)
         assert result.timeout_type == TimeoutType.POOL  # type: ignore
 
