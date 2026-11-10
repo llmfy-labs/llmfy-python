@@ -8,16 +8,25 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import anthropic
-import httpx
 import pytest
 
 import llmfy.llmfy_core.llms.anthropic.messages.anthropic_messages_model as anthropic_model_module
-from llmfy.exception.llmfy_exception import LLMfyException, RateLimitException
+from llmfy.exception._httpx_compat import httpx_modules
+from llmfy.exception.llmfy_exception import (
+    LLMfyException,
+    RateLimitException,
+    TimeoutException,
+    TimeoutType,
+)
 from llmfy.llmfy_core.llms.anthropic.messages.anthropic_messages_model import (
     AnthropicMessagesModel,
 )
 from llmfy.llmfy_core.model_backend import ModelBackend
 from llmfy.llmfy_core.service_provider import ServiceProvider
+
+# The HTTP package the provider SDK builds requests/responses with: `httpx2` on
+# current SDK releases, `httpx` on older ones.
+httpx = httpx_modules()[0]
 
 
 @pytest.fixture
@@ -103,3 +112,19 @@ def test_provider_api_error_is_mapped(model: AnthropicMessagesModel):
         model.generate(
             messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
         )
+
+
+def test_provider_timeout_maps_timeout_type_from_cause(
+    model: AnthropicMessagesModel, httpx_mod
+):
+    # Mirrors how the SDK raises it: `APITimeoutError(...) from <httpx2/httpx timeout>`.
+    request = httpx_mod.Request("POST", "https://api.anthropic.com/v1/messages")
+    error = anthropic.APITimeoutError(request=request)
+    error.__cause__ = httpx_mod.ConnectTimeout("connect timeout", request=request)
+    model.client.messages.create = MagicMock(side_effect=error)
+    with pytest.raises(TimeoutException) as exc_info:
+        model.generate(
+            messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        )
+    assert exc_info.value.timeout_type == TimeoutType.CONNECT
+    assert exc_info.value.provider == ServiceProvider.ANTHROPIC

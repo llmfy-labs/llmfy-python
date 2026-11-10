@@ -125,9 +125,9 @@ class GoogleAIGenerateModel(BaseAIModel):
         return types.GenerateContentConfig(**config_kwargs)
 
     def __call_googleai(self, params: dict[str, Any]):
-        import httpx
         from google.genai import errors
 
+        from llmfy.exception._httpx_compat import timeout_exception_classes
         from llmfy.exception.exception_handler import handle_google_error
         from llmfy.llmfy_core.llms.google.generate.googleai_generate_usage import (
             track_googleai_usage,
@@ -142,7 +142,7 @@ class GoogleAIGenerateModel(BaseAIModel):
                     config=params["config"],
                 )
                 return response
-            except (errors.APIError, httpx.TimeoutException) as e:
+            except (errors.APIError, *timeout_exception_classes()) as e:
                 raise handle_google_error(e) from e
 
         return _call_googleai_impl(params)
@@ -151,9 +151,9 @@ class GoogleAIGenerateModel(BaseAIModel):
         # Async counterpart of `__call_googleai`, used by `agenerate`. The
         # `google-genai` SDK has no separate async client class — the same
         # `genai.Client` exposes an async surface under `.aio`.
-        import httpx
         from google.genai import errors
 
+        from llmfy.exception._httpx_compat import timeout_exception_classes
         from llmfy.exception.exception_handler import handle_google_error
         from llmfy.llmfy_core.llms.google.generate.googleai_generate_usage import (
             track_googleai_usage,
@@ -168,15 +168,15 @@ class GoogleAIGenerateModel(BaseAIModel):
                     config=params["config"],
                 )
                 return response
-            except (errors.APIError, httpx.TimeoutException) as e:
+            except (errors.APIError, *timeout_exception_classes()) as e:
                 raise handle_google_error(e) from e
 
         return _call_googleai_impl_async(params)
 
     def __call_stream_googleai(self, params: dict[str, Any]):
-        import httpx
         from google.genai import errors
 
+        from llmfy.exception._httpx_compat import timeout_exception_classes
         from llmfy.exception.exception_handler import handle_google_error
         from llmfy.llmfy_core.llms.google.generate.googleai_generate_usage import (
             track_googleai_stream_usage,
@@ -190,7 +190,7 @@ class GoogleAIGenerateModel(BaseAIModel):
                     contents=params["contents"],
                     config=params["config"],
                 )
-            except (errors.APIError, httpx.TimeoutException) as e:
+            except (errors.APIError, *timeout_exception_classes()) as e:
                 raise handle_google_error(e) from e
 
         return _call_stream_googleai_impl(params)
@@ -198,9 +198,9 @@ class GoogleAIGenerateModel(BaseAIModel):
     def __call_stream_googleai_async(self, params: dict[str, Any]):
         # Async counterpart of `__call_stream_googleai`, used by
         # `agenerate_stream`. Same `.aio` async surface as `__call_googleai_async`.
-        import httpx
         from google.genai import errors
 
+        from llmfy.exception._httpx_compat import timeout_exception_classes
         from llmfy.exception.exception_handler import handle_google_error
         from llmfy.llmfy_core.llms.google.generate.googleai_generate_usage import (
             track_googleai_stream_usage_async,
@@ -216,7 +216,7 @@ class GoogleAIGenerateModel(BaseAIModel):
                 )
                 async for chunk in stream:
                     yield chunk
-            except (errors.APIError, httpx.TimeoutException) as e:
+            except (errors.APIError, *timeout_exception_classes()) as e:
                 raise handle_google_error(e) from e
 
         return _call_stream_googleai_impl_async(params)

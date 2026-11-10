@@ -12,15 +12,24 @@ tests/exception/test_exception_handler.py for that).
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
 import openai
 import pytest
 
 import llmfy.llmfy_core.llms.openai.chat.openai_chat_model as openai_chat_model_module
-from llmfy.exception.llmfy_exception import LLMfyException, RateLimitException
+from llmfy.exception._httpx_compat import httpx_modules
+from llmfy.exception.llmfy_exception import (
+    LLMfyException,
+    RateLimitException,
+    TimeoutException,
+    TimeoutType,
+)
 from llmfy.llmfy_core.llms.openai.chat.openai_chat_model import OpenAIChatModel
 from llmfy.llmfy_core.model_backend import ModelBackend
 from llmfy.llmfy_core.service_provider import ServiceProvider
+
+# The HTTP package the provider SDK builds requests/responses with: `httpx2` on
+# current SDK releases, `httpx` on older ones.
+httpx = httpx_modules()[0]
 
 
 def make_completion(content=None, tool_calls=None, response_id="resp_1"):
@@ -97,6 +106,19 @@ class TestGenerate:
         )
         with pytest.raises(RateLimitException) as exc_info:
             model.generate(messages=[{"role": "user", "content": "hi"}])
+        assert exc_info.value.provider == ServiceProvider.OPENAI
+
+    def test_provider_timeout_maps_timeout_type_from_cause(
+        self, model: OpenAIChatModel, httpx_mod
+    ):
+        # Mirrors how the SDK raises it: `APITimeoutError(...) from <httpx2/httpx timeout>`.
+        request = httpx_mod.Request("POST", "https://api.openai.com/v1/chat/completions")
+        error = openai.APITimeoutError(request=request)
+        error.__cause__ = httpx_mod.ReadTimeout("read timeout", request=request)
+        model.client.chat.completions.create = MagicMock(side_effect=error)
+        with pytest.raises(TimeoutException) as exc_info:
+            model.generate(messages=[{"role": "user", "content": "hi"}])
+        assert exc_info.value.timeout_type == TimeoutType.READ
         assert exc_info.value.provider == ServiceProvider.OPENAI
 
     def test_generic_exception_is_wrapped_as_llmfy_exception(

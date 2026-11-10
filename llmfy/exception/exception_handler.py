@@ -1,3 +1,7 @@
+from llmfy.exception._httpx_compat import (
+    resolve_timeout_type,
+    timeout_exception_classes,
+)
 from llmfy.exception.exception_mapper import (
     ANTHROPIC_ERROR_MAP,
     BEDROCK_ERROR_MAP,
@@ -109,22 +113,12 @@ def handle_openai_error(e) -> LLMfyException:
         exception_class = LLMfyException
 
     if exception_class is TimeoutException:
-        import httpx
-
-        timeout_type_map = {
-            httpx.ConnectTimeout: TimeoutType.CONNECT,
-            httpx.ReadTimeout: TimeoutType.READ,
-            httpx.WriteTimeout: TimeoutType.WRITE,
-            httpx.PoolTimeout: TimeoutType.POOL,
-        }
-        cause = getattr(e, "__cause__", None)
-        timeout_type = timeout_type_map.get(type(cause))
         return TimeoutException(
             message=str(e),
             status_code=status_code,
             raw_error=raw_error,
             provider=ServiceProvider.OPENAI,
-            timeout_type=timeout_type,
+            timeout_type=resolve_timeout_type(getattr(e, "__cause__", None)),
         )
 
     return exception_class(
@@ -171,22 +165,12 @@ def handle_anthropic_error(e) -> LLMfyException:
         exception_class = LLMfyException
 
     if exception_class is TimeoutException:
-        import httpx
-
-        timeout_type_map = {
-            httpx.ConnectTimeout: TimeoutType.CONNECT,
-            httpx.ReadTimeout: TimeoutType.READ,
-            httpx.WriteTimeout: TimeoutType.WRITE,
-            httpx.PoolTimeout: TimeoutType.POOL,
-        }
-        cause = getattr(e, "__cause__", None)
-        timeout_type = timeout_type_map.get(type(cause))
         return TimeoutException(
             message=str(e),
             status_code=status_code,
             raw_error=raw_error,
             provider=ServiceProvider.ANTHROPIC,
-            timeout_type=timeout_type,
+            timeout_type=resolve_timeout_type(getattr(e, "__cause__", None)),
         )
 
     return exception_class(
@@ -203,21 +187,14 @@ def handle_google_error(e) -> LLMfyException:
 
     Docs: https://github.com/googleapis/python-genai#error-handling
     """
-    import httpx
     from google.genai import errors
 
-    if isinstance(e, httpx.TimeoutException):
-        timeout_type_map = {
-            httpx.ConnectTimeout: TimeoutType.CONNECT,
-            httpx.ReadTimeout: TimeoutType.READ,
-            httpx.WriteTimeout: TimeoutType.WRITE,
-            httpx.PoolTimeout: TimeoutType.POOL,
-        }
+    if isinstance(e, timeout_exception_classes()):
         return TimeoutException(
             message=str(e),
             raw_error=e,
             provider=ServiceProvider.GOOGLE,
-            timeout_type=timeout_type_map.get(type(e)),
+            timeout_type=resolve_timeout_type(e),
         )
 
     if isinstance(e, errors.APIError):

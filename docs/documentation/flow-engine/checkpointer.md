@@ -63,6 +63,8 @@ Stores state in a SQL database (PostgreSQL, MySQL, or SQLite). Auto-creates tabl
     | MySQL | `aiomysql` | `pymysql` |
     | SQLite | `aiosqlite` | *(built-in)* |
 
+    Async drivers also need SQLAlchemy's asyncio extension, `pip install "sqlalchemy[asyncio]"` (it pulls in `greenlet`, which SQLAlchemy 2.1+ no longer installs by default). Sync drivers work without it.
+
 ```python linenums="1"
 from llmfy.flow_engine.checkpointer.sql_checkpointer import SQLCheckpointer
 

@@ -27,11 +27,6 @@ try:
         select,
     )
     from sqlalchemy.dialects import mysql, postgresql
-    from sqlalchemy.ext.asyncio import (
-        AsyncSession,
-        async_sessionmaker,
-        create_async_engine,
-    )
     from sqlalchemy.orm import declarative_base, sessionmaker
 
     SQLALCHEMY_AVAILABLE = True
@@ -88,6 +83,25 @@ try:
 except ImportError:
     SQLALCHEMY_AVAILABLE = False
 
+# SQLAlchemy's asyncio extension needs `greenlet`, which SQLAlchemy >= 2.1 no
+# longer installs by default (only via the `sqlalchemy[asyncio]` extra), and
+# importing the extension without it raises `ImportError`. Import it on its
+# own so a missing `greenlet` only disables async connection strings instead
+# of making SQLAlchemy look absent and breaking the sync drivers too.
+if SQLALCHEMY_AVAILABLE:
+    try:
+        from sqlalchemy.ext.asyncio import (
+            AsyncSession,
+            async_sessionmaker,
+            create_async_engine,
+        )
+
+        SQLALCHEMY_ASYNC_AVAILABLE = True
+    except ImportError:
+        SQLALCHEMY_ASYNC_AVAILABLE = False
+else:
+    SQLALCHEMY_ASYNC_AVAILABLE = False
+
 
 class SQLCheckpointer(BaseCheckpointer):
     """
@@ -97,6 +111,10 @@ class SQLCheckpointer(BaseCheckpointer):
     - PostgreSQL (async: asyncpg, sync: psycopg2)
     - MySQL (async: aiomysql, sync: pymysql)
     - SQLite (async: aiosqlite, sync: built-in)
+
+    Async drivers also need SQLAlchemy's asyncio extension
+    (`pip install "sqlalchemy[asyncio]"`, which pulls in `greenlet`); sync
+    drivers work without it.
     """
 
     def __init__(
@@ -149,10 +167,10 @@ class SQLCheckpointer(BaseCheckpointer):
             - SQLite:     "sqlite:///./database.db"
 
         Installation:
-            Async drivers (recommended):
-            - pip install sqlalchemy asyncpg --break-system-packages      # PostgreSQL
-            - pip install sqlalchemy aiomysql --break-system-packages     # MySQL
-            - pip install sqlalchemy aiosqlite --break-system-packages    # SQLite
+            Async drivers (recommended; need the `asyncio` extra for greenlet):
+            - pip install "sqlalchemy[asyncio]" asyncpg --break-system-packages    # PostgreSQL
+            - pip install "sqlalchemy[asyncio]" aiomysql --break-system-packages   # MySQL
+            - pip install "sqlalchemy[asyncio]" aiosqlite --break-system-packages  # SQLite
 
             Sync drivers (for compatibility):
             - pip install sqlalchemy psycopg2-binary --break-system-packages  # PostgreSQL
@@ -164,7 +182,8 @@ class SQLCheckpointer(BaseCheckpointer):
                 "SQLAlchemy is required for SQLCheckpointer.\n"
                 "Install with: pip install sqlalchemy --break-system-packages\n\n"
                 "Then install your database driver:\n"
-                "  Async (recommended):\n"
+                "  Async (recommended; also needs the asyncio extra):\n"
+                '    pip install "sqlalchemy[asyncio]" --break-system-packages\n'
                 "    pip install asyncpg --break-system-packages      # PostgreSQL\n"
                 "    pip install aiomysql --break-system-packages     # MySQL\n"
                 "    pip install aiosqlite --break-system-packages    # SQLite\n\n"
@@ -183,6 +202,15 @@ class SQLCheckpointer(BaseCheckpointer):
         )
 
         if self.is_async:
+            if not SQLALCHEMY_ASYNC_AVAILABLE:
+                raise LLMfyException(
+                    "Async connection strings need SQLAlchemy's asyncio extension, "
+                    "which requires the 'greenlet' package.\n"
+                    'Install with: pip install "sqlalchemy[asyncio]" '
+                    "--break-system-packages\n"
+                    "Or use a sync connection string instead, e.g. "
+                    '"sqlite:///./database.db".'
+                )
             # Async mode
             self.engine = create_async_engine(connection_string, echo=echo)
             self.session_maker = async_sessionmaker(

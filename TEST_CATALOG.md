@@ -57,7 +57,7 @@ Each section names its source test file(s) so behavior and proof stay linked.
 - [x] OpenAI and Anthropic share the same 9 SDK-exception-class-name keys and the same shape (both SDKs use matching class names): `RateLimitError`→429, `APITimeoutError`→408 timeout, `APIConnectionError`→`(ServiceUnavailable, None)` (no default status — a network failure has no HTTP response), `AuthenticationError`→401, `PermissionDeniedError`→403, `BadRequestError`→400, `NotFoundError`→404, `UnprocessableEntityError`→422, `InternalServerError`→500.
 - [x] Google is keyed directly by **HTTP status int** (not a class name), values are plain exception classes (no status tuple, since the key already is the status): 400, 401, 403, 404, 408, 429, 500, 503 all mapped; 403 → `PermissionDeniedException`.
 
-**Error handlers** (`test_exception_handler.py`) — tested against real SDK exception instances (`botocore`, `httpx`, `google-genai`), not mocks, for the ones that dispatch via `isinstance`:
+**Error handlers** (`test_exception_handler.py`) — tested against real SDK exception instances (`botocore`, `httpx2`/`httpx`, `google-genai`), not mocks, for the ones that dispatch via `isinstance`. Timeout tests run once per installed httpx-family package (the shared `httpx_mod` fixture):
 - [x] Bedrock: `ReadTimeoutError`/`ConnectTimeoutError` (real botocore exceptions) map to `TimeoutException` with `timeout_type=READ`/`CONNECT` respectively — checked *before* the generic `ClientError` handling.
 - [x] A non-`ClientError`, non-timeout exception becomes a plain `LLMfyException` (status code stays `None`).
 - [x] A mapped `ClientError` error code produces the mapped exception class; an explicit non-zero `HTTPStatusCode` from the response always wins over the map's default status; a missing `HTTPStatusCode` falls back to the map default; an unknown error code falls back to a plain `LLMfyException`.
@@ -66,8 +66,13 @@ Each section names its source test file(s) so behavior and proof stay linked.
 - [x] OpenAI/Anthropic (identical dispatch logic, different provider tag): dispatch is purely by `type(exception).__name__` string match plus `hasattr` checks — never `isinstance` against the real SDK — so an unknown exception-class name always falls back to plain `LLMfyException`.
 - [x] `response`/`request_id`/`body` attributes are copied into `raw_error` only when present on the source exception (never invented).
 - [x] An explicit non-falsy `status_code` on the source exception wins over the map's default; a falsy/absent one falls back to the map default.
-- [x] Timeout-type resolution for OpenAI/Anthropic inspects `exception.__cause__`'s exact type against `httpx.ConnectTimeout`/`ReadTimeout`/`WriteTimeout`/`PoolTimeout` — an unrelated or missing cause yields `timeout_type=None`.
-- [x] Google: `httpx.TimeoutException` subclasses map to `TimeoutException` (status_code stays `None` here — an asymmetry versus the other three providers, which do set one). A real `google.genai.errors.APIError` maps by its `.code` (HTTP status); an unmapped code falls back to plain `LLMfyException`; `.details` is copied into `raw_error` only when present. Any other exception type (not a timeout, not an `APIError`) becomes a generic `LLMfyException` with `raw_error={"error": str(e)}`.
+- [x] Timeout-type resolution for OpenAI/Anthropic inspects `exception.__cause__`'s exact type against `ConnectTimeout`/`ReadTimeout`/`WriteTimeout`/`PoolTimeout` from `httpx2` or `httpx` — an unrelated or missing cause yields `timeout_type=None`.
+- [x] Google: `httpx2.TimeoutException`/`httpx.TimeoutException` subclasses map to `TimeoutException` (status_code stays `None` here — an asymmetry versus the other three providers, which do set one). A real `google.genai.errors.APIError` maps by its `.code` (HTTP status); an unmapped code falls back to plain `LLMfyException`; `.details` is copied into `raw_error` only when present. Any other exception type (not a timeout, not an `APIError`) becomes a generic `LLMfyException` with `raw_error={"error": str(e)}`.
+
+**httpx/httpx2 compatibility** (`test_httpx_compat.py`) — current provider SDKs use `httpx2`, a fork of `httpx` whose classes are not subclasses of the `httpx` ones; older SDKs use `httpx`:
+- [x] Every installed httpx-family package is found, `httpx2` first; `ConnectTimeout`/`ReadTimeout`/`WriteTimeout`/`PoolTimeout` resolve to `CONNECT`/`READ`/`WRITE`/`POOL` by exact type, and the bare `TimeoutException` base, an unrelated exception, or `None` resolve to `None`.
+- [x] With only `httpx` importable (no `httpx2`), its classes are used; with both importable, both packages' timeouts are recognized; with neither, the timeout-class tuple is empty and matches nothing.
+- [x] The package lookup is cached, so a missing package isn't searched for on every request.
 
 **Package exports** (`test_exception_package_exports.py`)
 - [x] Every name in `llmfy.exception.__all__` is importable and is a subclass of `LLMfyException`.
@@ -252,6 +257,7 @@ formatting-specific logic is already covered above.
 **Shared behavior across all 5 model classes** (each verified at least once):
 - [x] Constructing a model without the required API credentials (API key, or for Bedrock all three of access key / secret key / region) raises a clean, actionable `LLMfyException` naming the missing credential — never a raw SDK error.
 - [x] A provider SDK error raised by the mocked client call surfaces as the **correctly-mapped** `LLMfyException` subclass (e.g. a rate-limit error becomes `RateLimitException`) — this proves the model-to-error-handler wiring end-to-end, not just the handler in isolation.
+- [x] A transport timeout surfaces as `TimeoutException` with the right `timeout_type`, for each installed httpx-family package: OpenAI Chat and Anthropic via a real SDK `APITimeoutError` whose `__cause__` is an `httpx2`/`httpx` timeout; Google (sync and async) via the raw `httpx2`/`httpx` timeout the `google-genai` SDK lets through.
 - [x] A non-provider, generic exception (e.g. a plain network failure) is wrapped as a generic `LLMfyException` rather than left unwrapped or misclassified.
 - [x] A response with a tool-call/function-call result parses into `AIResponse.tool_calls` with `content=None`; a plain-text response parses into `AIResponse.content` with `tool_calls=None`.
 
@@ -486,6 +492,7 @@ formatting-specific logic is already covered above.
 **SQL storage** (`sql_checkpointer.py`, `test_sql_checkpointer.py`)
 - [x] `state` is stored as a codec-encoded binary column (`LargeBinary`, `LONGBLOB` on MySQL to avoid its 64KB plain-`BLOB` cap) rather than JSON text — encryption round-trips end-to-end through the real column type, and decrypting with the wrong Fernet key fails loudly (`InvalidToken`) rather than silently returning garbage.
 - [x] `echo=True` (SQL statement logging) is documented as unsafe for production once `encryption_key` isn't set, since it logs bound parameters as-is.
+- [x] The sync driver path (`sqlite:///...`) works when SQLAlchemy's asyncio extension can't be imported (SQLAlchemy 2.1+ without `greenlet`): only async connection strings are disabled, and those raise a clear `LLMfyException` pointing at `pip install "sqlalchemy[asyncio]"` instead of the whole checkpointer reporting SQLAlchemy as missing.
 
 **Redis storage** (`redis_checkpointer.py`, `test_redis_checkpointer.py`)
 - [x] Checkpoint metadata (id, session, timestamp, node, step) stays plain JSON; only the `state` field is codec-encoded then base64-wrapped so it can still live inside the same JSON payload — `list()` (which calls `load()` per entry) transparently benefits from decoding, compression, and decryption without its own logic.

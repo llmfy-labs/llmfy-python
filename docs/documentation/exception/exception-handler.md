@@ -105,10 +105,12 @@ from llmfy import TimeoutException, TimeoutType
 | **Bedrock** | `botocore.ConnectTimeoutError` | `READ` |
 | **Bedrock** | `ClientError: ModelTimeoutException` | `MODEL` |
 | **OpenAI** | `APITimeoutError` (inspects `__cause__`) | `CONNECT` / `READ` / `WRITE` / `POOL` / `None` |
-| **Google** | `httpx.ConnectTimeout` | `CONNECT` |
-| **Google** | `httpx.ReadTimeout` | `READ` |
-| **Google** | `httpx.WriteTimeout` | `WRITE` |
-| **Google** | `httpx.PoolTimeout` | `POOL` |
+| **Google** | `httpx2.ConnectTimeout` / `httpx.ConnectTimeout` | `CONNECT` |
+| **Google** | `httpx2.ReadTimeout` / `httpx.ReadTimeout` | `READ` |
+| **Google** | `httpx2.WriteTimeout` / `httpx.WriteTimeout` | `WRITE` |
+| **Google** | `httpx2.PoolTimeout` / `httpx.PoolTimeout` | `POOL` |
+
+For Anthropic and OpenAI, `timeout_type` comes from the type of the SDK error's `__cause__`, which is one of the same four transport timeouts. Current provider SDK releases use [`httpx2`](https://github.com/pydantic/httpx2), a fork of `httpx` under a separate import name, and older releases use `httpx`. LLMfy recognizes the timeout classes from whichever of the two packages is installed, and from both when both are.
 
 ### Example
 
@@ -137,7 +139,7 @@ LLMfy automatically maps provider-specific errors to the corresponding exception
 
 ### Anthropic
 
-The `anthropic` SDK's exception hierarchy is httpx-based and structurally analogous to OpenAI's, so the mapping is identical in shape:
+The `anthropic` SDK's exception hierarchy is built on `httpx2` (`httpx` in older releases) and structurally analogous to OpenAI's, so the mapping is identical in shape:
 
 | Provider Error | LLMfy Exception | Status Code |
 |----------------|----------------|-------------|

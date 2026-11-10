@@ -37,6 +37,8 @@
     | [pymysql](https://pypi.org/project/PyMySQL/)     | 🔸 Optional        | MySQL sync driver for `SQLCheckpointer`       | `pip install pymysql`       |
     | [aiosqlite](https://pypi.org/project/aiosqlite/) | 🔸 Optional        | SQLite async driver for `SQLCheckpointer`     | `pip install aiosqlite`     |
 
+    Any async driver also needs SQLAlchemy's asyncio extension: `pip install "sqlalchemy[asyncio]"` (pulls in `greenlet`, no longer installed by default since SQLAlchemy 2.1). Sync drivers don't need it.
+
 
 ## Provider-specific extras
 

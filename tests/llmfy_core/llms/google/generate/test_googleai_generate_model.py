@@ -5,13 +5,18 @@ covers construction, one successful generate() path, and error mapping.
 """
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from google.genai import errors as google_errors
 
 import llmfy.llmfy_core.llms.google.generate.googleai_generate_model as googleai_model_module
-from llmfy.exception.llmfy_exception import LLMfyException, RateLimitException
+from llmfy.exception.llmfy_exception import (
+    LLMfyException,
+    RateLimitException,
+    TimeoutException,
+    TimeoutType,
+)
 from llmfy.llmfy_core.llms.google.generate.googleai_generate_model import (
     GoogleAIGenerateModel,
 )
@@ -106,3 +111,26 @@ def test_provider_api_error_is_mapped(model: GoogleAIGenerateModel):
     )
     with pytest.raises(RateLimitException):
         model.generate(messages=[{"role": "user", "parts": [{"text": "hi"}]}])
+
+
+def test_provider_timeout_is_mapped(model: GoogleAIGenerateModel, httpx_mod):
+    # google-genai lets httpx2/httpx timeouts propagate as-is; the model must
+    # catch them (not crash on a missing `httpx` import) and map the type.
+    model.client.models.generate_content = MagicMock(
+        side_effect=httpx_mod.ReadTimeout("read timeout")
+    )
+    with pytest.raises(TimeoutException) as exc_info:
+        model.generate(messages=[{"role": "user", "parts": [{"text": "hi"}]}])
+    assert exc_info.value.timeout_type == TimeoutType.READ
+    assert exc_info.value.provider == ServiceProvider.GOOGLE
+
+
+async def test_provider_timeout_is_mapped_async(
+    model: GoogleAIGenerateModel, httpx_mod
+):
+    model.client.aio.models.generate_content = AsyncMock(
+        side_effect=httpx_mod.ConnectTimeout("connect timeout")
+    )
+    with pytest.raises(TimeoutException) as exc_info:
+        await model.agenerate(messages=[{"role": "user", "parts": [{"text": "hi"}]}])
+    assert exc_info.value.timeout_type == TimeoutType.CONNECT
