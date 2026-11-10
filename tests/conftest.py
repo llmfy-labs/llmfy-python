@@ -52,14 +52,18 @@ class FakeAIModel(BaseAIModel):
     """Test double for `BaseAIModel` used to unit-test `LLMfy` without any
     real provider. Every method is driven by an injectable queue/side_effect
     so tests can script multi-round tool-calling scenarios.
+
+    Queued items may be exceptions instead of responses: the call raises
+    that exception, which lets tests script failures (e.g. for retry).
     """
 
     def __init__(
         self,
         backend: ModelBackend = ModelBackend.OPENAI_CHAT,
         provider: ServiceProvider = ServiceProvider.OPENAI,
-        responses: list[AIResponse] | None = None,
+        responses: list[AIResponse | Exception] | None = None,
         stream_chunks: list[AIResponse] | None = None,
+        stream_scripts: list[list[AIResponse | Exception]] | None = None,
     ):
         self.backend = backend
         self.provider = provider
@@ -67,13 +71,32 @@ class FakeAIModel(BaseAIModel):
         # (or repeats the last one forever if the queue has exactly one item
         # — convenient for single-round tests).
         self._responses = list(responses) if responses else [AIResponse(content="ok")]
+        # Every stream call yields `stream_chunks`, unless `stream_scripts`
+        # is given: then each stream call consumes the next script (a list of
+        # chunks, where an exception is raised at that point in the stream)
+        # and streams nothing once the scripts run out.
         self._stream_chunks = list(stream_chunks) if stream_chunks else []
+        self._stream_scripts = (
+            [list(script) for script in stream_scripts] if stream_scripts is not None else None
+        )
         self.calls: list[list[dict[str, Any]]] = []
 
     def _next_response(self) -> AIResponse:
-        if len(self._responses) > 1:
-            return self._responses.pop(0)
-        return self._responses[0]
+        response = self._responses.pop(0) if len(self._responses) > 1 else self._responses[0]
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    def _next_stream(self) -> list[AIResponse | Exception]:
+        if self._stream_scripts is None:
+            return list(self._stream_chunks)
+        return self._stream_scripts.pop(0) if self._stream_scripts else []
+
+    @staticmethod
+    def _stream_item(item: AIResponse | Exception) -> AIResponse:
+        if isinstance(item, Exception):
+            raise item
+        return item
 
     def generate(
         self,
@@ -91,7 +114,8 @@ class FakeAIModel(BaseAIModel):
         **kwargs,
     ) -> Generator[AIResponse, Any, None]:
         self.calls.append(messages)
-        yield from self._stream_chunks
+        for item in self._next_stream():
+            yield self._stream_item(item)
 
     async def agenerate(
         self,
@@ -109,8 +133,8 @@ class FakeAIModel(BaseAIModel):
         **kwargs,
     ) -> AsyncGenerator[AIResponse, Any]:
         self.calls.append(messages)
-        for chunk in self._stream_chunks:
-            yield chunk
+        for item in self._next_stream():
+            yield self._stream_item(item)
 
 
 @pytest.fixture

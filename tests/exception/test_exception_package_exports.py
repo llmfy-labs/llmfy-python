@@ -29,6 +29,7 @@ def test_no_stray_extra_exports():
         "LLMfyException",
         "AuthenticationException",
         "ContentFilterException",
+        "EmptyResponseException",
         "InvalidRequestException",
         "ModelErrorException",
         "ModelNotFoundException",

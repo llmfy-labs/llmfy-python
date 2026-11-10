@@ -34,6 +34,7 @@ from llmfy import LLMfyException
 | `ServiceUnavailableException` | Service temporarily unavailable (HTTP 500/503) |
 | `ContentFilterException` | Content blocked by safety filters |
 | `ModelErrorException` | Model processing error (HTTP 424) |
+| `EmptyResponseException` | Every attempt returned an empty reply; raised only with `LLMRetryPolicy(on_empty_exhausted="raise")` — see [Retry](../features/retry.md) |
 
 ## Basic Usage
 

@@ -45,6 +45,7 @@ def test_full_exception_hierarchy_is_exported():
         "LLMfyException",
         "AuthenticationException",
         "ContentFilterException",
+        "EmptyResponseException",
         "InvalidRequestException",
         "ModelErrorException",
         "ModelNotFoundException",
@@ -63,6 +64,13 @@ def test_full_exception_hierarchy_is_exported():
     ]:
         assert name in llmfy.__all__
         assert issubclass(getattr(llmfy, name), llmfy.LLMfyException)
+
+
+def test_llm_retry_api_is_exported():
+    for name in ["LLMRetryPolicy", "RetryEvent", "SDKRetryConfig"]:
+        assert name in llmfy.__all__
+    # FlowEngine's node-level RetryPolicy is a different class.
+    assert llmfy.LLMRetryPolicy is not llmfy.RetryPolicy
 
 
 def test_chunking_and_text_preprocessing_utilities_exported():

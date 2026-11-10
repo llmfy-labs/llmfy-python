@@ -31,6 +31,7 @@ Each section names its source test file(s) so behavior and proof stay linked.
 - [x] Core chat API is exported: `LLMfy`, `Message`, `Role`, `Tool`, `ToolRegistry`, `AIResponse`, `GenerationResponse`.
 - [x] Every provider's model + config class is exported (all 5 backends).
 - [x] The full exception hierarchy is exported, and every exported exception class is a subclass of `LLMfyException`.
+- [x] The LLM retry API is exported: `LLMRetryPolicy`, `RetryEvent`, `SDKRetryConfig` — and `LLMRetryPolicy` is a different class from FlowEngine's node-level `RetryPolicy`.
 - [x] Chunking/text-preprocessing utilities are exported: `chunk_text`, `chunk_markdown_by_header`, `clean_text_for_embedding`.
 - [x] `__version__` is exported and is a string.
 
@@ -295,6 +296,41 @@ formatting-specific logic is already covered above.
 - [x] Streaming (`invoke_stream`/`chat_stream`): content chunks are yielded as they arrive and their text is accumulated; a **final terminal chunk** is always yielded after the stream ends, carrying an empty `AIResponse` (`content=None`) paired with the full accumulated message history — this is the signal consumers use to retrieve final history, and it must be distinguishable from a genuine empty-string content chunk (which is a separate, real edge case also verified: an empty-string chunk from the model is indistinguishable from "no content this chunk" by design).
 - [x] `LLMfy` builds a fresh, unshared message history for every `invoke`/`chat` call (no `messages_temp`/`clear_messages_temp()` public attribute) — reusing one instance for a second call must not see the first call's history, so concurrent calls on the same instance no longer race on shared conversation state.
 - [x] Every async method (`ainvoke`, `ainvoke_with_tools`, `achat`, `achat_with_tools`) mirrors its sync counterpart's behavior exactly, including the tool-execution-loop and exception-wrapping rules; `ainvoke_stream`/`achat_stream` are thread-offloaded wrappers around the sync streaming generator (not independently-implemented native async streams) and must be verified to produce identical output to their sync counterparts.
+
+## `LLMfy` retry: `LLMRetryPolicy` & `SDKRetryConfig`
+*`tests/llmfy_core/retry/`* — scripted failures come from `FakeAIModel` (its queues accept exceptions); the retry runner's clock and sleeps are replaced by a fake clock, so no test actually sleeps.
+
+**Classifiers, validation & backoff** (`test_llm_retry_policy.py`)
+- [x] Retryable by default (counted against `max_attempts`): `ModelErrorException`, and `TimeoutException` only when `timeout_type` is `MODEL`. Network timeouts (`READ`/`CONNECT`/none), capacity errors, invalid-request/auth/content-filter errors and non-LLMfy exceptions are not.
+- [x] Capacity errors (governed by `throttle_wait`): `RateLimitException`, `ServiceUnavailableException` (including Bedrock's `ModelNotReady` mapped to 429), and any `LLMfyException` with status 429/503/529 (Anthropic's unmapped 529 overloaded). `QuotaExceededException`, model errors and status-less errors are not.
+- [x] A reply is "empty" when it has no non-blank text and no tool calls — whitespace-only or thinking-only replies are empty; a tool-call-only reply is not.
+- [x] Defaults: 3 attempts, no throttle wait, retry empty replies, return the last empty reply when exhausted, retry streams. `max_attempts < 1`, negative delays and an unknown `on_empty_exhausted` raise `ValueError`; the policy is immutable.
+- [x] Backoff doubles from `base_delay` up to `max_delay`, with jitter between 50% and 100% of the nominal delay; a zero base delay never sleeps.
+
+**`LLMfy(retry=...)` behavior** (`test_llmfy_retry.py`)
+- [x] Without a policy nothing changes: the first error propagates and an empty reply is returned as-is, after exactly one model call.
+- [x] Retryable errors are retried until success; once attempts run out the **last** error is raised (same object). Errors left to the SDK (invalid request, read timeout, throttling without a wait) are raised after one call; `max_attempts=1` disables retries; a custom `is_retryable` widens what is retried.
+- [x] Each attempt sends an equal but freshly built message payload (not the same list object).
+- [x] Empty replies are retried; when every attempt is empty the last empty reply is returned, or `EmptyResponseException` (carrying that reply on `.response`) is raised with `on_empty_exhausted="raise"`. With `retry_on_empty=False` the first empty reply is returned. Errors and empty replies share one attempt budget.
+- [x] Capacity errors are retried while `throttle_wait` lasts and do not use up `max_attempts`; the total of the sleeps equals the wait exactly (the last sleep is clamped), each sleep stays under `throttle_max_delay`, and the wait is counted from the first capacity error (an earlier model-error backoff does not change it).
+- [x] Tool calling: each model round trip is its own retry scope — a retry in a later round never re-runs a tool that already ran (`invoke_with_tools`, `chat_with_tools`, `ainvoke_with_tools`).
+- [x] The policy belongs to the `LLMfy` instance: two instances sharing one model keep their own policies, and the model's methods are never patched.
+- [x] `on_retry` receives one `RetryEvent` per retry (reason `capacity`/`error`/`empty`, attempt, model name, delay matching the actual sleep, error or `None`, remaining wait for capacity, `streaming` flag); exceptions raised by the hook propagate. Each retry is logged at `WARNING` with an `[LLM Retry]` prefix.
+- [x] Streams are retried only while nothing has been yielded: a stream that fails before its first chunk is reopened and its full text and final history come through; a stream that fails after a chunk raises with only the chunks already yielded, without sleeping; `retry_stream=False` disables stream retries; stream retries are flagged `streaming=True`.
+- [x] Async methods (`ainvoke`, `achat`, `ainvoke_with_tools`, `ainvoke_stream`, `achat_stream`) follow the same rules and sleep through the async sleep.
+
+**`SDKRetryConfig` on the models** (`test_sdk_retry_config.py`)
+- [x] Validation: all fields default to `None`; `max_attempts < 1` and non-positive timeouts raise `ValueError`.
+- [x] Bedrock: without it, botocore keeps its defaults (legacy mode, no extra client config). With it, the client uses `standard` retry mode with `total_max_attempts` and the given read/connect timeouts. A `client_config` (e.g. `max_pool_connections`) is kept and `sdk_retry` wins over its retry settings; a `client_config` alone is passed through. The aioboto3 client gets the same config.
+- [x] OpenAI Chat, OpenAI Responses and Anthropic: without it, both sync and async clients keep the SDK's default retries and timeout. With it, `max_retries = max_attempts - 1` and the read/connect timeouts are set while write/pool keep the SDK defaults; `max_attempts=1` means no SDK retries; a read timeout alone keeps the default connect timeout.
+- [x] Google: no `HttpOptions` are built without it (or with only a connect timeout, which Google ignores); with it, `retry_options.attempts` and the request timeout in milliseconds are set on the client.
+
+**Both layers end to end** (`test_retry_bedrock_integration.py`) — real boto3/aioboto3 against a local HTTP stub of Bedrock Converse that replays scripted replies; nothing reaches AWS:
+- [x] The SDK layer alone recovers from throttling, model-not-ready, 500, 503 and a read timeout within its 3 attempts, with no policy sleep.
+- [x] Without a throttle wait the policy does not repeat what the SDK gave up on (throttling, 503, read timeout — the latter surfacing as `TimeoutException` with `timeout_type=READ`): exactly one SDK call of 3 attempts.
+- [x] With a throttle wait the policy starts a fresh SDK call after the SDK gives up, and gives up once the wait runs out (sleeps summing to the wait, every policy call making 3 SDK attempts).
+- [x] Model timeouts (408), model errors (424) and empty replies are retried by the policy, each retry a fresh SDK call starting at attempt 1; the policy raises once its attempts run out.
+- [x] Within one call the layers hand over (throttled, then a model error, then success); invalid requests are tried once by both layers; the async path (aioboto3) follows the same layering.
 
 ## Utilities: chunking & text preprocessing
 *`tests/llmfy_utils/`*

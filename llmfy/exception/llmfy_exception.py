@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     # here would trigger `llmfy_core/__init__.py` — which pulls in every
     # provider model, several of which import back `from llmfy import
     # LLMfyException` — before `llmfy.LLMfyException` itself exists yet.
+    from llmfy.llmfy_core.responses.ai_response import AIResponse
     from llmfy.llmfy_core.service_provider import ServiceProvider
 
 
@@ -160,6 +161,25 @@ class ModelErrorException(LLMfyException):
     """Model processing error"""
 
     pass
+
+
+class EmptyResponseException(LLMfyException):
+    """The model answered with neither text nor tool calls on every attempt.
+
+    Raised by `LLMfy` only when its `LLMRetryPolicy` has
+    `on_empty_exhausted="raise"`; the last empty reply is kept on `response`.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        response: AIResponse,
+        status_code: int | None = None,
+        raw_error: Any | None = None,
+        provider: ServiceProvider | str | None = None,
+    ):
+        super().__init__(message, status_code, raw_error, provider)
+        self.response = response
 
 
 class GraphValidationException(LLMfyException):

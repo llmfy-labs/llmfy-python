@@ -16,6 +16,10 @@ from llmfy.llmfy_core.llms.openai.responses.openai_responses_config import (
 from llmfy.llmfy_core.messages.tool_call import ToolCall
 from llmfy.llmfy_core.model_backend import ModelBackend
 from llmfy.llmfy_core.responses.ai_response import AIResponse
+from llmfy.llmfy_core.retry.sdk_retry_config import (
+    SDKRetryConfig,
+    httpx_sdk_client_options,
+)
 from llmfy.llmfy_core.service_provider import ServiceProvider
 
 
@@ -43,6 +47,7 @@ class OpenAIResponsesModel(BaseAIModel):
         api_key: str | None = None,
         base_url: str | None = None,
         default_headers: dict[str, str] | None = None,
+        sdk_retry: SDKRetryConfig | None = None,
     ):
         """
         OpenAIResponsesModel
@@ -58,6 +63,9 @@ class OpenAIResponsesModel(BaseAIModel):
                 request, passed straight through to the `openai` SDK client. Needed for
                 compatible endpoints that require headers beyond `Authorization` — e.g.
                 Bedrock Mantle's Project-scoping headers.
+            sdk_retry (SDKRetryConfig, optional): `openai` SDK retry/timeout settings
+                (`max_retries`, `timeout`) for both the sync and async client.
+                Defaults to None (SDK defaults).
         """
         config = config if config is not None else OpenAIResponsesConfig()
         if openai is None:
@@ -71,13 +79,20 @@ class OpenAIResponsesModel(BaseAIModel):
                 "Please provide `OPENAI_API_KEY` on your environment or pass `api_key`!"
             )
 
+        sdk_options = httpx_sdk_client_options(sdk_retry, openai)
         self.client = openai.OpenAI(
-            api_key=api_key, base_url=base_url, default_headers=default_headers
+            api_key=api_key,
+            base_url=base_url,
+            default_headers=default_headers,
+            **sdk_options,
         )
         # Native async client for `agenerate` — see the matching comment in
         # `OpenAIChatModel.__init__`.
         self.async_client = openai.AsyncOpenAI(
-            api_key=api_key, base_url=base_url, default_headers=default_headers
+            api_key=api_key,
+            base_url=base_url,
+            default_headers=default_headers,
+            **sdk_options,
         )
         self.backend = ModelBackend.OPENAI_RESPONSES
         self.provider = ServiceProvider.OPENAI
